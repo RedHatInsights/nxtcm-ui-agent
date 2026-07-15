@@ -6,17 +6,17 @@ parameters:
 - name: NAMESPACE
   value: ${NAMESPACE}
 - name: BOT_IMAGE
-  value: quay.io/redhat-services-prod/rh-platform-experien-tenant/nxtcm-ui-agent
+  value: quay.io/redhat-services-prod/console-next-tenant/nxtcm-ui-agent/nxtcm-ui-agent
 - name: IMAGE_TAG
   required: true
 - name: BOT_LABEL
-  value: nxtcm-ai-bot
+  value: hcc-ai-nxtcm
 - name: BOT_REPLICAS
   value: "0"
 - name: BOT_BOARD_NAME
-  value: ""
+  value: "Console Next Sprint Board"
 - name: BOT_SPRINT_PREFIX
-  value: ""
+  value: "Console Next Sprint"
 - name: BOT_INCLUDE_BACKLOG
   value: "false"
 - name: BOT_INSTANCE_ID
