@@ -73,6 +73,7 @@ objects:
           app.kubernetes.io/component: bot
           app.kubernetes.io/part-of: devbot
       spec:
+        automountServiceAccountToken: false
         containers:
         - name: bot
           image: ${BOT_IMAGE}:${IMAGE_TAG}
