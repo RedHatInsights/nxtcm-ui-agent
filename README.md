@@ -23,6 +23,17 @@ git submodule update --init --recursive
 docker build -f dev-bot/Dockerfile.runner -t nxtcm-ui-agent:local .
 ```
 
+## Bot Instances
+
+This runner ships two instance configs:
+
+| Config path | Deployment | Workflow | Purpose |
+|-------------|------------|----------|---------|
+| `instance/ui-config/` | `devbot-console-next` | `jira-sprint` | Jira tickets with label `hcc-ai-nxtcm` |
+| `instance/renovate-config/` | `devbot-rehor-renovate-patch` | `renovate-fix` | Failing Renovate PRs on `nxtcm-components` |
+
+See [docs/renovate-bot-deployment.md](docs/renovate-bot-deployment.md) for OpenShift parameters for the Renovate bot.
+
 ## Customization
 
 - **setup.sh** — runs as root during build. Install packages, write config, etc.
