@@ -1,0 +1,8 @@
+{
+  "mcpServers": {
+    "hcc-patternfly-data-view": {
+      "command": "hcc-pf-mcp",
+      "args": []
+    }
+  }
+}

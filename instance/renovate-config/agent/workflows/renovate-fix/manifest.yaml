@@ -1,0 +1,21 @@
+name: renovate-fix
+type: workflow
+description: Monitor and fix failing Renovate dependency PRs on nxtcm-components
+
+preflight:
+  - 01-renovate-discover.py
+  - 02-gh-pr-status.py
+
+shared_skills:
+  - push-and-pr
+
+provides:
+  claude_md: CLAUDE.md
+
+requires:
+  mcp_servers:
+    - bot-memory
+  env_vars:
+    - BOT_INSTANCE_ID
+  optional_env_vars:
+    - SLACK_WEBHOOK_URL
