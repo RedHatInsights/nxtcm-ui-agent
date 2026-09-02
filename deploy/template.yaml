@@ -7,8 +7,9 @@ parameters:
   value: ${NAMESPACE}
 - name: BOT_IMAGE
   value: quay.io/redhat-services-prod/console-next-tenant/nxtcm-ui-agent/nxtcm-ui-agent
-- name: IMAGE_TAG
+- name: IMAGE_DIGEST
   required: true
+  description: Konflux IMAGE_DIGEST (sha256:...) from tasks.build-image-index.results.IMAGE_DIGEST
 - name: BOT_LABEL
   value: hcc-ai-nxtcm
 - name: BOT_REPLICAS
@@ -33,8 +34,6 @@ parameters:
   required: true
 - name: VERTEX_ALLOWED_MODELS
   required: true
-- name: SLACK_WEBHOOK_URL
-  value: ""
 objects:
 
 # ============================================================================
@@ -76,7 +75,7 @@ objects:
         automountServiceAccountToken: false
         containers:
         - name: bot
-          image: ${BOT_IMAGE}:${IMAGE_TAG}
+          image: ${BOT_IMAGE}@${IMAGE_DIGEST}
           securityContext:
             runAsNonRoot: true
             allowPrivilegeEscalation: false
@@ -152,9 +151,12 @@ objects:
             value: http://devbot-memory-server:8080/api/bot-status
           - name: COSTS_API_URL
             value: http://devbot-memory-server:8080/api/costs
-          # Slack notifications
+          # Slack notifications (from shared Vault secret)
           - name: SLACK_WEBHOOK_URL
-            value: ${SLACK_WEBHOOK_URL}
+            valueFrom:
+              secretKeyRef:
+                name: devbot-secrets
+                key: slack-webhook
           # Proxy — shared pod deployed by platform-frontend-ai-dev
           - name: PROXY_HOST
             value: devbot-proxy
