@@ -1,0 +1,7 @@
+workflow: ./workflows/renovate-fix
+source: scheduled
+envs:
+  - node
+  - patternfly-mcp
+claude_md:
+  strategy: append
