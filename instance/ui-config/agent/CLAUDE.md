@@ -28,3 +28,15 @@ nvm use 24
 - `nxtcm-components` repo → always `nvm use 24`
 - `.nvmrc` says `20` → `nvm use 20` (installs automatically if missing)
 - No version file → use the defaults (22)
+
+## Verification override (nxtcm-components)
+
+This instance targets the **nxtcm-components** component library, not HCC console apps.
+
+**Instance rules override conflicting jira-sprint workflow text** (e.g. step 9 visual verification, screenshot-on-feedback in Priority 1):
+
+- **Ignore** HCC dev-proxy, `start-dev-proxy.sh`, SSO login, and stage console URLs — not applicable.
+- **Follow** `personas/frontend/prompt.md` as the verification source of truth. Reload it before implementing and before visual verification.
+- **Visual changes** → mandatory before/after Storybook screenshots via chrome-devtools MCP, uploaded with `/gh-release-upload`, referenced in the PR **Screenshots** section (via `/push-and-pr --find-template`).
+- **Non-visual changes** → run lint, type-check, `test:all`, build; set Screenshots to `N/A — no visual changes`.
+- **Order:** implement → automated checks → [visual: screenshots + upload] → push → create PR with screenshot URLs already in body.
