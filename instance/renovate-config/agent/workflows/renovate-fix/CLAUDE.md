@@ -1,6 +1,6 @@
 # Renovate Fix Workflow
 
-Monitor failing Renovate dependency PRs on configured repos. Auto-fix CI for minor/patch bumps. Major bumps get a review-request comment only — no code changes.
+Monitor failing Renovate dependency PRs on configured repos. Auto-fix CI for any Renovate PR with failing checks or merge conflicts (all semver tiers). Humans still merge after CI is green.
 
 ## Cycle Loop
 
@@ -19,32 +19,13 @@ ONE item/cycle. Read preflight input (Renovate Discovery + GH PR Status sections
 
 Active statuses: `in_progress`, `pr_open`, `pr_changes`. Terminal: `archived`, `paused`, `done`.
 
-## Priority 0 — Major Version PRs (comment only)
+**Ignore core Jira / Primary Label sections** — this workflow never uses Jira or Atlassian MCP.
 
-For each PR in `### MAJOR` preflight section OR tracked task with `metadata.bump_type=major`:
+## Priority 1 — Auto-Fix Failing Renovate PRs
 
-1. Check `metadata.major_comment_posted` — if true, skip (no repeat comments)
-2. Read PR body via `gh pr view <N> --repo <upstream> --json body,title`
-3. Post PR comment via `gh pr comment <N> --repo <upstream> --body "..."` with:
-   - Package name and old → new version
-   - Semver tier: **major**
-   - Summary of CI failures from preflight
-   - Breaking-change notes from Renovate PR body (release notes section if present)
-   - Explicit ask: *"This is a major dependency update. Please confirm if you want this merged; the bot will not auto-fix major bumps."*
-4. `task_add` or `task_update`:
-   - `source_type="github"`
-   - `external_key="renovate-fix:<repo-key>#<N>"`
-   - `status="paused"`, `paused_reason="major_version_pending_review"`
-   - `metadata`: `{"bump_type": "major", "major_comment_posted": true, "renovate": true, "prs": [{"repo": "<upstream>", "number": N, "host": "github"}]}`
-5. **Do NOT** checkout, commit, or push
+Pick first PR from `### AUTO-FIX` section OR first `CI FAILING` / `CONFLICTS` tracked task.
 
-If human later approves via PR comment ("please fix", "go ahead", "merge") → treat as feedback in P1 only if they explicitly request the bot to fix CI. Default: major stays paused until human merges or fixes manually.
-
-## Priority 1 — Auto-Fix Failing Renovate PRs (minor/patch)
-
-Pick first PR from `### AUTO-FIX` section OR first `CI FAILING` / `CONFLICTS` tracked task (non-major).
-
-**Skip** if `metadata.bump_type=major` or PR appears in MAJOR section.
+**Capacity**: `task_check_capacity(instance_id=...)` before `task_add`. No capacity → PR comment "at capacity, will retry", leave untracked, stop.
 
 ### Track task
 
@@ -60,9 +41,10 @@ task_add(
   title="<PR title>",
   metadata={
     "renovate": true,
-    "bump_type": "minor|patch",
     "prs": [{"repo": "<upstream>", "number": N, "url": "...", "host": "github"}],
-    "head_ref": "<headRefName>"
+    "head_ref": "<headRefName>",
+    "head_owner": "<headRepositoryOwner.login>",
+    "head_repo": "<headRepository.name>"
   }
 )
 ```
@@ -73,59 +55,78 @@ task_add(
 2. Clone or update `./repos/<repo-key>/`:
    - Not exists → `git clone --depth 1 <url from project-repos.json>`
    - `git fetch origin && git fetch upstream` (fork workflow)
+   - After `gh pr checkout`, deepen if rebase needs history: `git fetch --deepen=50` or `git fetch --unshallow`
 3. Checkout Renovate branch: `gh pr checkout <N> --repo <upstream>` from `./repos/<repo-key>/`
 4. `npm install` — fails → PR comment + `task_update` paused_reason, stop
 5. Read `AGENTS.md` + reload `personas/frontend/prompt.md`
 6. Diagnose CI failure from preflight (`ci_fail:*` checks)
 7. Fix code/lockfile/config — **do NOT change dependency versions beyond what Renovate already bumped**
+   - Expect breaking API/type changes on large upgrades; fix call sites/tests as needed while keeping Renovate's version pin
 8. Verify sequentially (persona rules):
    - `npm run lint`
    - `npm run type-check`
    - `npm run test:all`
    - `npm run build` (+ workspace builds if packages changed)
 9. Commit: `fix(deps): resolve CI for renovate bump <package>`
-10. Push to Renovate head branch (NOT `bot/<KEY>`):
+10. Push to the **PR head repository** (NOT fork `origin`, NOT `bot/<KEY>`):
     ```bash
-    git push origin HEAD:<headRefName>
+    # Prefer head_owner/head_repo from preflight metadata; else resolve:
+    gh pr view <N> --repo <upstream> --json headRefName,headRepository,headRepositoryOwner,isCrossRepository
+    # Push remote = headRepositoryOwner/headRepository (usually upstream, not the bot fork)
+    git remote get-url head-pr 2>/dev/null || git remote add head-pr "https://github.com/<head_owner>/<head_repo>.git"
+    git push head-pr HEAD:<headRefName>
     ```
-    Or `git push origin <headRefName>` if already on branch
+    Or if already on that branch and `head-pr` tracks it: `git push head-pr HEAD`
 11. `task_update` → `status="pr_open"`, `last_addressed=now`, `metadata.last_step="ci_fix_pushed"`
 12. Post brief PR comment: what was fixed + verification run
 
-On push failure → `metadata.last_step="push_failed"`, PR comment, keep `in_progress` for retry.
+On push failure → `metadata.last_step="push_failed"`, PR comment, keep `in_progress` for retry. Do **not** use `/push-and-pr` or create a new PR.
 
-## Priority 2 — Merge Conflicts (non-major only)
+**CI still red after push**: next cycle re-enters via `### CI FAILING` (this workflow always retries CI — partial fixes continue).
 
-For `CONFLICTS` bucket on minor/patch Renovate PRs:
+## Priority 2 — Merge Conflicts
+
+For `CONFLICTS` bucket on any Renovate PR:
 
 1. Checkout PR branch
-2. Rebase onto default branch: `git fetch upstream && git rebase upstream/main` (or master)
+2. Rebase onto default branch: resolve via `gh repo view <upstream> --json defaultBranchRef --jq .defaultBranchRef.name`, then `git fetch upstream && git rebase upstream/<default>`
 3. Resolve conflicts — preserve Renovate's dependency version changes
-4. Force push to PR head: `git push --force-with-lease origin <headRefName>`
+4. Force push to PR head repo (same `head-pr` remote as P1 step 10): `git push --force-with-lease head-pr <headRefName>`
 5. Re-run verification (lint → type-check → test:all → build)
 6. `task_update` `last_addressed=now`
 
-## Priority 3 — Merged PR Cleanup
+## Priority 3 — Merged / Closed PR Cleanup
 
-When preflight shows `MERGED` for a tracked Renovate task:
+When preflight shows `MERGED` or `CLOSED` for a tracked Renovate task:
 
-1. `memory_store` useful learnings (`category=learning`, tags=`dependency-upgrade`, `renovate`, repo filter)
+1. `memory_store` useful learnings if merged (`category=learning`, tags=`dependency-upgrade`, `renovate`, repo filter)
 2. `task_update` → `status="archived"`
 3. Do NOT delete Renovate branches (Renovate manages cleanup)
 
 ## Priority 4 — Discover New PRs
 
-If preflight `### AUTO-FIX` or `### MAJOR` lists untracked PRs and higher priorities empty:
+If preflight `### AUTO-FIX` lists untracked PRs and higher priorities empty:
 
-- Create task (P0 for major → paused after comment; P1 for minor/patch → in_progress)
-- Work one PR this cycle, stop
+- Create task → `in_progress` → fix one PR this cycle, stop
 
 If all sections empty and GH PR Status shows all CLEAN → stop with no work.
 
 ## Rules
 
+### Security override — Renovate head pushes (supersedes core)
+
+Core Security Rules say "NEVER push to branches other than `bot/<TICKET-KEY>`". **That rule does not apply to this workflow.**
+
+For renovate-fix only:
+- **Required**: push / `--force-with-lease` to the Renovate PR head ref on the PR **head repository** (`head_owner`/`head_repo` + `headRefName` / `metadata.head_ref`)
+- **Forbidden**: create `bot/` branches, open a new PR, or use `/push-and-pr`
+- **Still forbidden**: push to `main`/`master`
+
+This override is intentional and authorized for dependency CI repair on existing Renovate PRs.
+
+### Other rules
+
 - **ONE item/cycle** — fix one PR issue, then stop
-- **Never auto-fix or push to major-version PRs** unless human explicitly requests in PR comment
 - **Never merge PRs** — humans merge after CI green
 - **Never create Jira tickets** or use Jira MCP tools
 - **Never modify `.github/workflows/`**
@@ -133,3 +134,4 @@ If all sections empty and GH PR Status shows all CLEAN → stop with no work.
 - **Do NOT re-fetch** data already in preflight input
 - Reload `personas/frontend/prompt.md` before fixing nxtcm-components
 - Use `gh pr comment` for human-facing updates (normal language, not caveman mode)
+- Renovate may rebase/force-update its branches later and overwrite bot commits — re-fix on next cycle if CI fails again

@@ -1,5 +1,7 @@
 # nxtcm-renovate Instance — Additional Instructions
 
+Ignore core Primary Label / Jira workflow sections — this instance never uses Jira.
+
 ## Version Management
 
 This instance has **nvm** (Node) version manager installed. Use it to match the version required by each repo.

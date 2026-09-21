@@ -1,6 +1,6 @@
 # Renovate Bot Deployment
 
-Second bot deployment for the nxtcm-ui-agent runner image. Monitors failing Renovate PRs on `nxtcm-components` and auto-fixes minor/patch CI failures. Major version bumps receive a review-request comment only.
+Second bot deployment for the nxtcm-ui-agent runner image. Monitors failing Renovate PRs on `nxtcm-components` and auto-fixes CI for **all** semver tiers.
 
 ## Instance Config
 
@@ -36,6 +36,18 @@ Configured in app-interface: [`data/services/insights/platform-frontend-ai-dev/d
 
 No Jira board env vars required (`BOT_BOARD_NAME`, `BOT_SPRINT_PREFIX` are unused by the renovate workflow).
 
+### GitHub permissions (required for push)
+
+Renovate PRs are opened against **upstream** (`RedHatInsights/nxtcm-components`). The bot must **push to the PR head repository** (usually upstream `renovate/...` refs), not only the bot fork.
+
+Ensure the bot GitHub identity (PAT / app) can:
+
+1. Read open PRs and checks on upstream
+2. **Push commits to Renovate head branches** on the head repo (`headRepositoryOwner` / `headRepository` from `gh pr view`)
+3. Comment on those PRs
+
+If push fails with permission denied, add the bot as a collaborator with write access on the head repo (or grant the app contents:write on that repo). Fork-only write is **not** enough when `isCrossRepository` is false and head lives on upstream.
+
 ## Shared Infrastructure
 
 Both bots share (deployed by `platform-frontend-ai-dev` in the same namespace):
@@ -46,14 +58,6 @@ Both bots share (deployed by `platform-frontend-ai-dev` in the same namespace):
 
 ## Local Testing
 
-### Unit tests
-
-```bash
-cd nxtcm-ui-agent
-PYTHONPATH=dev-bot/presets/shared/preflight \
-  python3 -m pytest instance/renovate-config/agent/workflows/renovate-fix/tests/ -v
-```
-
 ### Preflight (requires gh auth + memory server)
 
 ```bash
@@ -62,7 +66,7 @@ export BOT_INSTANCE_ID=nxtcm-renovate
 cp instance/renovate-config/agent/project-repos.json dev-bot/project-repos.json
 
 cd dev-bot
-PYTHONPATH=presets/shared/preflight:../instance/renovate-config/agent/workflows/renovate-fix/preflight \
+PYTHONPATH=presets/shared/preflight:../instance/renovate-config/agent/workflows/renovate-fix/lib \
   python3 ../instance/renovate-config/agent/workflows/renovate-fix/preflight/01-renovate-discover.py | python3 -m json.tool
 ```
 
@@ -77,8 +81,7 @@ BOT_CONFIG_PATH=../instance/renovate-config BOT_INSTANCE_ID=nxtcm-renovate \
 ## Workflow Behavior Summary
 
 1. **Preflight** discovers open Renovate PRs with failing CI or merge conflicts on upstream repos from `project-repos.json`
-2. **Major bumps** → PR comment asking reviewers to confirm; task set to `paused`
-3. **Minor/patch bumps** → bot checks out PR branch, fixes CI, runs lint/type-check/test:all/build, pushes to Renovate head branch
-4. **Merged PRs** → task archived, learnings stored in memory
+2. **Any bump (major/minor/patch)** → bot checks out PR branch, fixes CI, runs lint/type-check/test:all/build, pushes to the **PR head repository** (not the bot fork alone)
+3. **Merged / closed PRs** → task archived, learnings stored in memory (on merge)
 
 Task keys: `renovate-fix:nxtcm-components#<pr-number>` with `source_type=github`.
