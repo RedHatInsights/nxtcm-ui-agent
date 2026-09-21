@@ -151,10 +151,19 @@ Capture **before** the first implementation commit (branch still matches main), 
    ```
    Wait for readiness — poll `/tmp/storybook.log` for "Local:" or use chrome-devtools `wait_for` on story content.
 
-2. **Find story URL** — read the changed `*.stories.tsx`:
+2. **Find story URL** — resolve which story renders the change (do not require a story-file diff):
+
+   **Discovery order:**
+   1. Co-located story — if you changed `Foo.tsx` / `Foo.spec.tsx`, look for `Foo.stories.tsx` next to it (even if that story file was not modified).
+   2. Else consumer stories — search `*.stories.tsx` for imports/usages of the changed component; screenshot the story that best shows the change (or multiple if needed; note which in the PR).
+   3. Else no Storybook coverage — Screenshots `N/A — no Storybook coverage` and skip this section. Do not invent a story URL.
+
+   **Build the iframe URL** from the chosen `*.stories.tsx`:
    - CSF3 `title` → story ID: lowercase, `/` → `-` (e.g. `Components/Dashboard/Widget` → `components-dashboard-widget`)
-   - Default variant → `--default` (or read `export default { title: ... }` and first named export)
+   - Variant → first named export, kebab-cased (often `--default`)
    - iframe URL: `http://127.0.0.1:6006/iframe.html?id=<story-id>--<variant>&viewMode=story`
+
+   Multiple consumer stories → capture before/after for the best representative story (or more than one if the change spans distinct UIs); note which in the PR.
 
 3. **Navigate + screenshot** via chrome-devtools MCP:
    - `navigate_page` → story iframe URL
@@ -176,6 +185,7 @@ Capture **before** the first implementation commit (branch still matches main), 
 Upload screenshots **before** creating the PR. When using `/push-and-pr --find-template`:
 - **Screenshots** → `### Before` + before URL, `### After` + after URL
 - Non-visual change → `N/A — no visual changes`
+- Visual change but no Storybook coverage → `N/A — no Storybook coverage`
 
 ### Coding standards
 
