@@ -3,21 +3,12 @@
 from __future__ import annotations
 
 import json
-import re
 import subprocess
 import sys
 
 from gh_pr_status import classify_gh, gh_pr
 
 TASK_KEY_PREFIX = "renovate-fix:"
-VERSION_RE = re.compile(r"v?(\d+)\.(\d+)\.(\d+)")
-FROM_TO_RE = re.compile(
-    r"from\s+v?(\d+)\.(\d+)\.(\d+)\s+to\s+v?(\d+)\.(\d+)\.(\d+)",
-    re.IGNORECASE,
-)
-RENOVATE_TABLE_RE = re.compile(
-    r"`?(\d+)\.(\d+)\.(\d+)`?\s*(?:→|->)\s*`?(\d+)\.(\d+)\.(\d+)`?",
-)
 
 
 def task_key(repo_key: str, pr_number: int) -> str:
@@ -44,73 +35,7 @@ def is_renovate_author(login: str) -> bool:
     if not login:
         return False
     lowered = login.lower()
-    return lowered in ("renovate[bot]", "renovate") or "renovate" in lowered
-
-
-def label_names(labels: list) -> set[str]:
-    """Normalize PR label objects or strings to lowercase names."""
-    names: set[str] = set()
-    for label in labels or []:
-        if isinstance(label, dict):
-            names.add(str(label.get("name", "")).lower())
-        else:
-            names.add(str(label).lower())
-    return names - {""}
-
-
-def _compare_versions(old: tuple[int, int, int], new: tuple[int, int, int]) -> str | None:
-    if new[0] > old[0]:
-        return "major"
-    if new[1] > old[1]:
-        return "minor"
-    if new[2] > old[2]:
-        return "patch"
-    return None
-
-
-def _bump_from_version_pair(old: tuple[int, int, int], new: tuple[int, int, int]) -> str | None:
-    return _compare_versions(old, new)
-
-
-def parse_semver_bump_from_text(text: str) -> str | None:
-    """Infer major/minor/patch from version pairs in text."""
-    if not text:
-        return None
-
-    match = FROM_TO_RE.search(text)
-    if match:
-        old = tuple(int(x) for x in match.group(1, 2, 3))
-        new = tuple(int(x) for x in match.group(4, 5, 6))
-        return _bump_from_version_pair(old, new)
-
-    match = RENOVATE_TABLE_RE.search(text)
-    if match:
-        old = tuple(int(x) for x in match.group(1, 2, 3))
-        new = tuple(int(x) for x in match.group(4, 5, 6))
-        return _bump_from_version_pair(old, new)
-
-    matches = VERSION_RE.findall(text)
-    if len(matches) < 2:
-        return None
-    old = tuple(int(x) for x in matches[0])
-    new = tuple(int(x) for x in matches[-1])
-    return _bump_from_version_pair(old, new)
-
-
-def classify_bump(labels: list, title: str = "", body: str = "") -> str:
-    """Classify semver bump tier. Unknown defaults to major (safe — comment only)."""
-    names = label_names(labels)
-    if "major" in names:
-        return "major"
-    if "minor" in names:
-        return "minor"
-    if "patch" in names:
-        return "patch"
-    for text in (body, title):
-        parsed = parse_semver_bump_from_text(text)
-        if parsed:
-            return parsed
-    return "major"
+    return lowered in ("renovate[bot]", "renovate")
 
 
 def has_actionable_issues(issues: list[str]) -> bool:
@@ -126,6 +51,15 @@ def is_draft(pr: dict) -> bool:
     return bool(pr.get("isDraft"))
 
 
+def _head_owner_repo(pr: dict) -> tuple[str, str]:
+    """Extract head repository owner/name from gh PR JSON fields."""
+    owner_obj = pr.get("headRepositoryOwner") or {}
+    owner = owner_obj.get("login") or ""
+    repo_obj = pr.get("headRepository") or {}
+    name = repo_obj.get("name") or ""
+    return owner, name
+
+
 def list_open_prs(upstream: str) -> list[dict]:
     """List open PRs on upstream repo via gh CLI."""
     try:
@@ -139,7 +73,8 @@ def list_open_prs(upstream: str) -> list[dict]:
                 "--state",
                 "open",
                 "--json",
-                "number,title,labels,url,headRefName,isDraft,author,body",
+                "number,title,url,headRefName,isDraft,author,"
+                "headRepository,headRepositoryOwner,isCrossRepository",
             ],
             capture_output=True,
             text=True,
@@ -167,7 +102,7 @@ def filter_renovate_prs(prs: list[dict]) -> list[dict]:
 
 
 def enrich_renovate_pr(upstream: str, repo_key: str, pr: dict) -> dict | None:
-    """Fetch CI state and bump classification for a Renovate PR."""
+    """Fetch CI state for a Renovate PR; return None if not actionable."""
     number = pr.get("number")
     if not number:
         return None
@@ -177,8 +112,8 @@ def enrich_renovate_pr(upstream: str, repo_key: str, pr: dict) -> dict | None:
     _, issues = classify_gh(data)
     if not has_actionable_issues(issues):
         return None
-    bump = classify_bump(pr.get("labels") or [], pr.get("title", ""), pr.get("body", ""))
     issue_str = ",".join(issues) if issues else "clean"
+    head_owner, head_repo = _head_owner_repo(pr)
     return {
         "repo_key": repo_key,
         "upstream": upstream,
@@ -186,7 +121,9 @@ def enrich_renovate_pr(upstream: str, repo_key: str, pr: dict) -> dict | None:
         "title": pr.get("title", ""),
         "url": pr.get("url", ""),
         "head_ref": pr.get("headRefName", ""),
-        "bump_type": bump,
+        "head_owner": head_owner,
+        "head_repo": head_repo,
+        "is_cross_repository": bool(pr.get("isCrossRepository")),
         "issues": issues,
         "issue_str": issue_str,
         "task_key": task_key(repo_key, number),
@@ -194,7 +131,7 @@ def enrich_renovate_pr(upstream: str, repo_key: str, pr: dict) -> dict | None:
 
 
 def tracked_renovate_keys(tasks: list[dict]) -> set[str]:
-    """Return external_keys for active Renovate tasks."""
+    """Return external_keys for Renovate tasks (any non-archived status)."""
     keys: set[str] = set()
     for task in tasks:
         key = task.get("external_key", "")
@@ -206,25 +143,27 @@ def tracked_renovate_keys(tasks: list[dict]) -> set[str]:
 def format_pr_line(entry: dict) -> str:
     upstream = entry["upstream"]
     num = entry["number"]
+    head = f"{entry.get('head_owner', '')}/{entry.get('head_repo', '')}".strip("/")
     lines = [
-        f"  PR {upstream}#{num} [{entry['issue_str']}] bump={entry['bump_type']}",
+        f"  PR {upstream}#{num} [{entry['issue_str']}]",
         f"  title: {entry['title']}",
         f"  head_ref: {entry['head_ref']}",
+        f"  head_repo: {head or '(resolve via gh pr view)'}",
         f"  task_key: {entry['task_key']}",
         f"  url: {entry['url']}",
     ]
     return "\n".join(lines)
 
 
-def discover_failing_renovate_prs(repos: dict, tasks: list[dict]) -> tuple[list[dict], list[dict], list[dict]]:
-    """Discover failing Renovate PRs bucketed by major vs auto-fix vs already tracked.
+def discover_failing_renovate_prs(repos: dict, tasks: list[dict]) -> tuple[list[dict], list[dict]]:
+    """Discover failing Renovate PRs for auto-fix vs already tracked.
 
-    Returns (major_entries, auto_fix_entries, tracked_entries).
+    Returns (auto_fix_entries, tracked_entries). Any Renovate PR with CI
+    failures or conflicts is eligible for auto-fix.
     """
     from common import upstream_repo
 
     tracked = tracked_renovate_keys(tasks)
-    major: list[dict] = []
     auto_fix: list[dict] = []
     already_tracked: list[dict] = []
 
@@ -239,10 +178,7 @@ def discover_failing_renovate_prs(repos: dict, tasks: list[dict]) -> tuple[list[
                 continue
             if entry["task_key"] in tracked:
                 already_tracked.append(entry)
-                continue
-            if entry["bump_type"] == "major":
-                major.append(entry)
             else:
                 auto_fix.append(entry)
 
-    return major, auto_fix, already_tracked
+    return auto_fix, already_tracked

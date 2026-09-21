@@ -2,12 +2,13 @@ name: renovate-fix
 type: workflow
 description: Monitor and fix failing Renovate dependency PRs on nxtcm-components
 
+# Informational — runner discovers all preflight/*.py by filename (not this list).
 preflight:
   - 01-renovate-discover.py
   - 02-gh-pr-status.py
 
-shared_skills:
-  - push-and-pr
+# Do NOT include push-and-pr — that skill creates bot/<KEY> PRs; we push to Renovate heads.
+shared_skills: []
 
 provides:
   claude_md: CLAUDE.md
