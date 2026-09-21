@@ -52,9 +52,28 @@ ComponentName/
 
 Configured in: `tsconfig.json`, `vite.config.ts`, `playwright-ct.config.ts`, `.storybook/main.ts`, `jest.config.js` (`@/` only).
 
+### Visual change detection
+
+Before verification, decide if the ticket introduces **visual changes** (screenshots required on PR).
+
+**Visual change** — any of:
+- Modified/added `*.tsx` component files (not test-only files unless rendered output changes)
+- Modified/added `*.stories.tsx`, CSS/styling, or layout-related props
+- Jira title/description/AC mentions UI, layout, styling, design, appearance, screenshot, visual
+- New component or visible behavior change in an existing component
+
+**Non-visual** — skip screenshots (still run full test suite):
+- Pure logic in `*.ts` / `*.test.ts` with no component or story changes
+- Dependency-only bumps, config/CI, docs-only
+- Refactors with identical rendered output
+
+When unsure → treat as visual.
+
 ### Verification — MANDATORY before PR
 
-**This is a component library. No dev proxy, no SSO login, no live console environment.**
+**This is a component library. No HCC dev-proxy, no SSO login, no live console environment.**
+
+**Order:** implement → automated checks → [visual: Storybook screenshots + upload] → push → PR with Screenshots URLs.
 
 Run sequentially from repo root:
 
@@ -63,6 +82,7 @@ Run sequentially from repo root:
 3. `npm run test:all` — jest + Playwright CT (**jest does NOT run in CI** — always run locally before PR)
 4. `npm run build` — root library
    - When changing a workspace package, also run: `npm run build -w @redhat-cloud-services/nxtcm-dashboard` or `npm run build -w @redhat-cloud-services/nxtcm-rosa-hcp-wizard`
+5. **Visual changes only** — Storybook screenshots (see below). Upload before opening PR.
 
 ### Playwright CT (component tests)
 
@@ -109,6 +129,63 @@ npm run build-storybook
 ```
 
 Do NOT use Storybook as the only verification method. Always run `test:all` + `build`.
+
+### Visual verification — Storybook + chrome-devtools
+
+**MANDATORY for visual changes.** Use Storybook + `chrome-devtools` MCP — not HCC dev-proxy.
+
+Same when reviewer asks for screenshots on an open PR.
+
+#### Before screenshot timing
+
+Capture **before** the first implementation commit (branch still matches main), or:
+- `git stash -u` → checkout default branch → capture → checkout feature branch → `git stash pop`
+
+#### Steps
+
+0. **Kill stale Storybook**: `lsof -ti :6006 | xargs kill 2>/dev/null || true`
+
+1. **Start Storybook** (after `npm install`, Node 24):
+   ```bash
+   nohup npm run storybook > /tmp/storybook.log 2>&1 &
+   ```
+   Wait for readiness — poll `/tmp/storybook.log` for "Local:" or use chrome-devtools `wait_for` on story content.
+
+2. **Find story URL** — resolve which story renders the change (do not require a story-file diff):
+
+   **Discovery order:**
+   1. Co-located story — if you changed `Foo.tsx` / `Foo.spec.tsx`, look for `Foo.stories.tsx` next to it (even if that story file was not modified).
+   2. Else consumer stories — search `*.stories.tsx` for imports/usages of the changed component; screenshot the story that best shows the change (or multiple if needed; note which in the PR).
+   3. Else no Storybook coverage — Screenshots `N/A — no Storybook coverage` and skip this section. Do not invent a story URL.
+
+   **Build the iframe URL** from the chosen `*.stories.tsx`:
+   - CSF3 `title` → story ID: lowercase, `/` → `-` (e.g. `Components/Dashboard/Widget` → `components-dashboard-widget`)
+   - Variant → first named export, kebab-cased (often `--default`)
+   - iframe URL: `http://127.0.0.1:6006/iframe.html?id=<story-id>--<variant>&viewMode=story`
+
+   Multiple consumer stories → capture before/after for the best representative story (or more than one if the change spans distinct UIs); note which in the PR.
+
+3. **Navigate + screenshot** via chrome-devtools MCP:
+   - `navigate_page` → story iframe URL
+   - `wait_for` key text from the component
+   - `take_screenshot` → save `/tmp/<TICKET-KEY>-before.png` (before changes) or `-after.png` (after changes)
+   - Never commit screenshots to the repo. Never base64 data URIs in PR body.
+
+4. **Upload to GitHub Releases** via `/gh-release-upload` skill (never `gh release upload` directly):
+   ```bash
+   python3 .claude/skills/gh-release-upload/upload.py /tmp/<TICKET-KEY>-before.png platex-rehor-bot/nxtcm-components
+   python3 .claude/skills/gh-release-upload/upload.py /tmp/<TICKET-KEY>-after.png platex-rehor-bot/nxtcm-components
+   ```
+   Fork owner/repo from `project-repos.json` `url` field. Skill returns markdown image URLs.
+
+5. **Stop Storybook** — mandatory: `lsof -ti :6006 | xargs kill`. Verify port is free.
+
+#### PR Screenshots section
+
+Upload screenshots **before** creating the PR. When using `/push-and-pr --find-template`:
+- **Screenshots** → `### Before` + before URL, `### After` + after URL
+- Non-visual change → `N/A — no visual changes`
+- Visual change but no Storybook coverage → `N/A — no Storybook coverage`
 
 ### Coding standards
 

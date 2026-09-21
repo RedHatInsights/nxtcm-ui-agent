@@ -28,3 +28,7 @@ nvm use 24
 - `nxtcm-components` repo → always `nvm use 24`
 - `.nvmrc` says `20` → `nvm use 20` (installs automatically if missing)
 - No version file → use the defaults (22)
+
+## Verification override (nxtcm-components)
+
+For visual verification, reload and follow `personas/frontend/prompt.md` (overrides jira-sprint visual steps).
