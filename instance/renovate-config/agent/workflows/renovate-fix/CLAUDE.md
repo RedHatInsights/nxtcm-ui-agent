@@ -53,19 +53,24 @@ task_add(
 
 1. `nvm install 24 && nvm use 24`
 2. Clone or update `./repos/<repo-key>/`:
-   - Not exists → `git clone --depth 1 <url from project-repos.json>`
+   - Not exists → `git clone --depth 1 <url from project-repos.json>` then immediately:
+     `git remote add upstream <upstream-url from project-repos.json>`
+   - Either way, ensure upstream remote exists before fetching:
+     `git remote get-url upstream 2>/dev/null || git remote add upstream <upstream-url from project-repos.json>`
    - `git fetch origin && git fetch upstream` (fork workflow)
    - After `gh pr checkout`, deepen if rebase needs history: `git fetch --deepen=50` or `git fetch --unshallow`
 3. Checkout Renovate branch: `gh pr checkout <N> --repo <upstream>` from `./repos/<repo-key>/`
 4. `npm install` — fails → PR comment + `task_update` paused_reason, stop
 5. Read `AGENTS.md` + reload `personas/frontend/prompt.md`
-6. Diagnose CI failure from preflight (`ci_fail:*` checks)
+6. Diagnose CI failure from preflight (`ci_fail:*` checks).
+   **If the issue list also contains `conflict`**: the CI failure may be caused by or compounded by the merge conflict. Perform the P2 rebase first (fetch upstream, rebase onto default branch, resolve conflicts preserving Renovate's version pins, force-push) before attempting any code fixes. If the rebase fails, stop and update `paused_reason`.
 7. Fix code/lockfile/config — **do NOT change dependency versions beyond what Renovate already bumped**
    - Expect breaking API/type changes on large upgrades; fix call sites/tests as needed while keeping Renovate's version pin
-8. Verify sequentially (persona rules):
+8. Verify sequentially (persona rules — **never run in parallel**):
    - `npm run lint`
    - `npm run type-check`
-   - `npm run test:all`
+   - `npm run test:unit` (jest only — skip if the script doesn't exist, jest does not run in CI)
+   - Playwright CT — **must apply the container browser shim first** (see `personas/frontend/prompt.md` Playwright CT section for the stash + patch sequence); run `npm run test:ct` inside the shim block, then restore the file
    - `npm run build` (+ workspace builds if packages changed)
 9. Commit: `fix(deps): resolve CI for renovate bump <package>`
 10. Push to the **PR head repository** (NOT fork `origin`, NOT `bot/<KEY>`):
@@ -89,10 +94,10 @@ On push failure → `metadata.last_step="push_failed"`, PR comment, keep `in_pro
 For `CONFLICTS` bucket on any Renovate PR:
 
 1. Checkout PR branch
-2. Rebase onto default branch: resolve via `gh repo view <upstream> --json defaultBranchRef --jq .defaultBranchRef.name`, then `git fetch upstream && git rebase upstream/<default>`
+2. Rebase onto default branch: resolve via `gh repo view <upstream> --json defaultBranchRef --jq .defaultBranchRef.name`, then `git fetch --unshallow 2>/dev/null || git fetch --deepen=50; git fetch upstream && git rebase upstream/<default>`
 3. Resolve conflicts — preserve Renovate's dependency version changes
-4. Force push to PR head repo (same `head-pr` remote as P1 step 10): `git push --force-with-lease head-pr <headRefName>`
-5. Re-run verification (lint → type-check → test:all → build)
+4. Force push to PR head repo (same `head-pr` remote as P1 step 10): `git push --force-with-lease head-pr HEAD:<headRefName>`
+5. Re-run verification (same sequence as P1 step 8: lint → type-check → test:unit → CT with shim → build)
 6. `task_update` `last_addressed=now`
 
 ## Priority 3 — Merged / Closed PR Cleanup
@@ -102,12 +107,6 @@ When preflight shows `MERGED` or `CLOSED` for a tracked Renovate task:
 1. `memory_store` useful learnings if merged (`category=learning`, tags=`dependency-upgrade`, `renovate`, repo filter)
 2. `task_update` → `status="archived"`
 3. Do NOT delete Renovate branches (Renovate manages cleanup)
-
-## Priority 4 — Discover New PRs
-
-If preflight `### AUTO-FIX` lists untracked PRs and higher priorities empty:
-
-- Create task → `in_progress` → fix one PR this cycle, stop
 
 If all sections empty and GH PR Status shows all CLEAN → stop with no work.
 

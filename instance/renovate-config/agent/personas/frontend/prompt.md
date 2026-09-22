@@ -73,7 +73,8 @@ export PLAYWRIGHT_BROWSERS_PATH=/opt/pw-browsers
 npm run test:ct
 ```
 
-Patch `playwright-ct.config.ts` for container — add `launchOptions` to the `use` block:
+**MANDATORY for container runs** — Playwright CT requires `--no-sandbox --disable-gpu` launch args.
+Add `launchOptions` to the `use` block in `playwright-ct.config.ts`:
 
 ```typescript
 use: {
@@ -86,9 +87,25 @@ use: {
 }
 ```
 
-Do NOT commit this patch — `git checkout -- playwright-ct.config.ts` after tests.
+Do NOT commit this shim. Use a patch file to preserve any real config changes the
+Renovate bump may have introduced (avoids stash-collision bugs):
 
-Run with `--workers=1` if resource errors occur.
+```bash
+# Save real config changes (if any) to a patch, then clean the file
+git diff -- playwright-ct.config.ts > /tmp/pw-real.patch
+git checkout -- playwright-ct.config.ts
+
+# Apply the container shim, run tests, restore
+# (shim is added here, after clean checkout)
+npm run test:ct
+
+# Remove shim, re-apply real changes (no-op if patch is empty)
+git checkout -- playwright-ct.config.ts
+git apply /tmp/pw-real.patch 2>/dev/null || true
+rm -f /tmp/pw-real.patch
+```
+
+Run with `--workers=1` if browser resource errors occur (`npm run test:ct -- --workers=1`).
 
 ### Playwright E2E
 
