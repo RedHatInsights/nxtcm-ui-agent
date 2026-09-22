@@ -35,7 +35,7 @@ def is_renovate_author(login: str) -> bool:
     if not login:
         return False
     lowered = login.lower()
-    return lowered in ("renovate[bot]", "renovate")
+    return lowered in ("renovate[bot]", "renovate", "app/renovate")
 
 
 def has_actionable_issues(issues: list[str]) -> bool:
@@ -72,6 +72,8 @@ def list_open_prs(upstream: str) -> list[dict]:
                 upstream,
                 "--state",
                 "open",
+                "--limit",
+                "50",
                 "--json",
                 "number,title,url,headRefName,isDraft,author,"
                 "headRepository,headRepositoryOwner,isCrossRepository",
@@ -130,10 +132,23 @@ def enrich_renovate_pr(upstream: str, repo_key: str, pr: dict) -> dict | None:
     }
 
 
+# Statuses that gh_pr_status.main() enriches and will surface in the GH PR
+# Status preflight output. Paused/done tasks are NOT enriched there, so do not
+# hide them from AUTO-FIX — they need to re-enter the fix queue.
+_ACTIVE_STATUSES = frozenset({"in_progress", "pr_open", "pr_changes"})
+
+
 def tracked_renovate_keys(tasks: list[dict]) -> set[str]:
-    """Return external_keys for Renovate tasks (any non-archived status)."""
+    """Return external_keys for active Renovate tasks.
+
+    Only includes tasks with active statuses so that paused or done tasks are
+    re-discovered by AUTO-FIX instead of falling into a black hole where they
+    appear under "Already tracked" but are absent from the GH PR Status section.
+    """
     keys: set[str] = set()
     for task in tasks:
+        if task.get("status") not in _ACTIVE_STATUSES:
+            continue
         key = task.get("external_key", "")
         if key.startswith(TASK_KEY_PREFIX):
             keys.add(key)
