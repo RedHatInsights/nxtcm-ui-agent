@@ -11,7 +11,7 @@ npm workspaces monorepo. Shared React component library for Red Hat ACM/OCM cons
 | `packages/nxtcm-rosa-hcp-wizard` | `@redhat-cloud-services/nxtcm-rosa-hcp-wizard` | ROSA HCP cluster creation wizard |
 
 ### Before changes
-- `npm install` first. Fails → STOP, post PR comment explaining the failure, do not proceed.
+- `npm install` first. Fails → STOP, do not proceed. Whether and how to post a PR comment is governed by the active workflow's CLAUDE.md (e.g. renovate-fix comments on structural failures but not transient ones).
 - Read `AGENTS.md` in full — it is the canonical source of truth for this repo.
 
 ### Node version
@@ -56,13 +56,14 @@ Configured in: `tsconfig.json`, `vite.config.ts`, `playwright-ct.config.ts`, `.s
 
 **This is a component library. No dev proxy, no SSO login, no live console environment.**
 
-Run sequentially from repo root:
+Run sequentially from repo root — **never in parallel**:
 
 1. `npm run lint` — lint `packages/**/*.{ts,tsx}`
 2. `npm run type-check` — root + workspace TypeScript
-3. `npm run test:all` — jest + Playwright CT (**jest does NOT run in CI** — always run locally before push)
-4. `npm run build` — root library
-   - When changing a workspace package, also run: `npm run build -w @redhat-cloud-services/nxtcm-dashboard` or `npm run build -w @redhat-cloud-services/nxtcm-rosa-hcp-wizard`
+3. `npm run test` — jest only (**jest does NOT run in CI** — always run locally before push)
+4. `npm run test:eslint-rules` — custom ESLint rule tests (node --test)
+5. Playwright CT — **always run via the shim sequence below**, never via `npm run test:all` directly (test:all bundles CT and will crash in a container without the shim applied first)
+6. `npm run build` — builds both workspace packages (`nxtcm-dashboard` and `nxtcm-rosa-hcp-wizard`). No separate root build needed.
 
 ### Playwright CT (component tests)
 
@@ -73,7 +74,7 @@ export PLAYWRIGHT_BROWSERS_PATH=/opt/pw-browsers
 npm run test:ct
 ```
 
-**MANDATORY for container runs** — Playwright CT requires `--no-sandbox --disable-gpu` launch args.
+**Container runs (e.g. renovate-fix agent): always use the shim sequence below instead — bare `npm run test:ct` will crash without `--no-sandbox`.**
 Add `launchOptions` to the `use` block in `playwright-ct.config.ts`:
 
 ```typescript
@@ -91,12 +92,17 @@ Do NOT commit this shim. Use a patch file to preserve any real config changes th
 Renovate bump may have introduced (avoids stash-collision bugs):
 
 ```bash
+export PLAYWRIGHT_BROWSERS_PATH=/opt/pw-browsers
+# Align the installed Chromium to the version this repo's Playwright expects
+# (required when Renovate bumps @playwright/test — avoids runtime download)
+align-playwright-browsers . || true
+
 # Save real config changes (if any) to a patch, then clean the file
 git diff -- playwright-ct.config.ts > /tmp/pw-real.patch
 git checkout -- playwright-ct.config.ts
 
-# Apply the container shim, run tests, restore
-# (shim is added here, after clean checkout)
+# Edit playwright-ct.config.ts: add the launchOptions block (shown above) to the `use:` section
+# Result: use: { launchOptions: { args: ['--no-sandbox', '--disable-gpu'] }, ...existing... }
 npm run test:ct
 
 # Remove shim, re-apply real changes (no-op if patch is empty)
@@ -125,7 +131,7 @@ npm run storybook      # dev server on :6006
 npm run build-storybook
 ```
 
-Do NOT use Storybook as the only verification method. Always run `test:all` + `build`.
+Do NOT use Storybook as the only verification method. Always run the full verification sequence (lint → type-check → jest → CT via shim → build).
 
 ### Coding standards
 

@@ -16,20 +16,6 @@ def task_key(repo_key: str, pr_number: int) -> str:
     return f"{TASK_KEY_PREFIX}{repo_key}#{pr_number}"
 
 
-def parse_task_key(external_key: str) -> tuple[str, int] | None:
-    """Parse renovate-fix:repo-key#N into (repo_key, pr_number)."""
-    if not external_key.startswith(TASK_KEY_PREFIX):
-        return None
-    rest = external_key[len(TASK_KEY_PREFIX) :]
-    if "#" not in rest:
-        return None
-    repo_key, num_str = rest.rsplit("#", 1)
-    try:
-        return repo_key, int(num_str)
-    except ValueError:
-        return None
-
-
 def is_renovate_author(login: str) -> bool:
     """Return True if the GitHub login belongs to Renovate."""
     if not login:
@@ -39,11 +25,18 @@ def is_renovate_author(login: str) -> bool:
 
 
 def has_actionable_issues(issues: list[str]) -> bool:
-    """True if PR has CI failures or merge conflicts."""
+    """True if PR has CI failures with no outstanding merge conflict.
+
+    Conflict-only PRs are skipped — Renovate rebases on its own.
+    PRs with conflict + CI failure are also skipped — CI cannot be fixed
+    on a conflicted branch (conflict markers look like TS errors, lockfile
+    may be corrupt). Wait for Renovate to rebase; CI failures re-surface
+    cleanly on the next preflight cycle.
+    """
     if not issues:
         return False
     if "conflict" in issues:
-        return True
+        return False
     return any(i.startswith("ci_fail") for i in issues)
 
 
@@ -73,7 +66,7 @@ def list_open_prs(upstream: str) -> list[dict]:
                 "--state",
                 "open",
                 "--limit",
-                "50",
+                "100",
                 "--json",
                 "number,title,url,headRefName,isDraft,author,"
                 "headRepository,headRepositoryOwner,isCrossRepository",
@@ -132,25 +125,46 @@ def enrich_renovate_pr(upstream: str, repo_key: str, pr: dict) -> dict | None:
     }
 
 
-# Statuses that gh_pr_status.main() enriches and will surface in the GH PR
-# Status preflight output. Paused/done tasks are NOT enriched there, so do not
-# hide them from AUTO-FIX — they need to re-enter the fix queue.
+# Statuses surfaced by gh_pr_status.main(). Tasks in these statuses are handled
+# by Script 02 and should NOT re-enter the Script 01 AUTO-FIX queue.
 _ACTIVE_STATUSES = frozenset({"in_progress", "pr_open", "pr_changes"})
 
 
-def tracked_renovate_keys(tasks: list[dict]) -> set[str]:
-    """Return external_keys for active Renovate tasks.
+def _is_auto_retryable(task: dict) -> bool:
+    """Return True if a paused task should re-enter AUTO-FIX for a retry.
 
-    Only includes tasks with active statuses so that paused or done tasks are
-    re-discovered by AUTO-FIX instead of falling into a black hole where they
-    appear under "Already tracked" but are absent from the GH PR Status section.
+    paused_reason prefixes:
+      "transient:*" — network/registry error, safe to retry automatically.
+      "blocked:*"   — structural failure (peer dep, unfixable API); wait for
+                      human action. Do NOT re-queue.
+    Tasks with no paused_reason prefix default to retryable for backwards compat.
+    """
+    reason = task.get("paused_reason") or ""
+    if reason.startswith("blocked:"):
+        return False
+    return True
+
+
+def tracked_renovate_keys(tasks: list[dict]) -> set[str]:
+    """Return external_keys of tasks that Script 02 (GH PR Status) already covers.
+
+    Active tasks (in_progress / pr_open / pr_changes) are enriched by Script 02
+    and must not appear in AUTO-FIX.
+
+    Paused tasks with a transient failure reason re-enter AUTO-FIX for automatic
+    retry. Paused tasks with a structural (blocked:*) failure reason are waiting
+    for human action and must also stay out of AUTO-FIX to avoid retry spam.
     """
     keys: set[str] = set()
     for task in tasks:
-        if task.get("status") not in _ACTIVE_STATUSES:
-            continue
+        status = task.get("status")
         key = task.get("external_key", "")
-        if key.startswith(TASK_KEY_PREFIX):
+        if not key.startswith(TASK_KEY_PREFIX):
+            continue
+        if status in _ACTIVE_STATUSES:
+            keys.add(key)
+        elif status == "paused" and not _is_auto_retryable(task):
+            # Blocked paused task — keep it out of AUTO-FIX; human must act.
             keys.add(key)
     return keys
 
@@ -158,27 +172,62 @@ def tracked_renovate_keys(tasks: list[dict]) -> set[str]:
 def format_pr_line(entry: dict) -> str:
     upstream = entry["upstream"]
     num = entry["number"]
-    head = f"{entry.get('head_owner', '')}/{entry.get('head_repo', '')}".strip("/")
+    head_owner = entry.get("head_owner", "")
+    head_repo = entry.get("head_repo", "")
+    existing_status = entry.get("existing_status")
+    existing_reason = entry.get("existing_paused_reason", "")
+    if existing_status:
+        status_note = f" resume:{existing_status}"
+        if existing_reason:
+            status_note += f" ({existing_reason})"
+    else:
+        status_note = " new"
     lines = [
-        f"  PR {upstream}#{num} [{entry['issue_str']}]",
+        f"  PR {upstream}#{num} [{entry['issue_str']}]{status_note}",
         f"  title: {entry['title']}",
         f"  head_ref: {entry['head_ref']}",
-        f"  head_repo: {head or '(resolve via gh pr view)'}",
+        f"  head_owner: {head_owner or '(resolve via gh pr view)'}",
+        f"  head_repo: {head_repo or '(resolve via gh pr view)'}",
+        f"  is_cross_repository: {entry.get('is_cross_repository', False)}",
         f"  task_key: {entry['task_key']}",
         f"  url: {entry['url']}",
     ]
     return "\n".join(lines)
 
 
+def _task_status_map(tasks: list[dict]) -> dict[str, dict]:
+    """Return {external_key: {status, paused_reason}} for all Renovate tasks."""
+    result = {}
+    for task in tasks:
+        key = task.get("external_key", "")
+        if not key.startswith(TASK_KEY_PREFIX):
+            continue
+        status = task.get("status")
+        if not status:
+            continue
+        result[key] = {
+            "status": status,
+            "paused_reason": task.get("paused_reason") or "",
+        }
+    return result
+
+
 def discover_failing_renovate_prs(repos: dict, tasks: list[dict]) -> tuple[list[dict], list[dict]]:
     """Discover failing Renovate PRs for auto-fix vs already tracked.
 
-    Returns (auto_fix_entries, tracked_entries). Any Renovate PR with CI
-    failures or conflicts is eligible for auto-fix.
+    Returns (auto_fix_entries, tracked_entries). Only PRs with CI failures
+    and no outstanding merge conflict are eligible for auto-fix. Conflicted
+    PRs (with or without CI failures) are excluded — Renovate rebases them;
+    the CI-only failure will surface on the next preflight cycle.
+
+    auto_fix entries include an `existing_status` field (e.g. "paused") when a
+    task already exists but is not active — so the agent knows to resume via
+    task_update rather than creating a duplicate with task_add.
     """
     from common import upstream_repo
 
     tracked = tracked_renovate_keys(tasks)
+    all_statuses = _task_status_map(tasks)
     auto_fix: list[dict] = []
     already_tracked: list[dict] = []
 
@@ -194,6 +243,12 @@ def discover_failing_renovate_prs(repos: dict, tasks: list[dict]) -> tuple[list[
             if entry["task_key"] in tracked:
                 already_tracked.append(entry)
             else:
+                # Carry existing status/reason so agent can resume instead of re-adding.
+                existing = all_statuses.get(entry["task_key"])
+                if existing:
+                    entry["existing_status"] = existing["status"]
+                    if existing["paused_reason"]:
+                        entry["existing_paused_reason"] = existing["paused_reason"]
                 auto_fix.append(entry)
 
     return auto_fix, already_tracked
