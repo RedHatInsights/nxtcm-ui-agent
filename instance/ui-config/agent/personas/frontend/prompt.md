@@ -62,9 +62,14 @@ Before verification, decide if the ticket introduces **visual changes** (screens
 - Modified/added `*.stories.tsx`, CSS/styling, or layout-related props
 - Jira title/description/AC mentions UI, layout, styling, design, appearance, screenshot, visual
 - New component or visible behavior change in an existing component
+- Modified a `*.ts` file (non-test) that is imported by at least one `*.tsx` component file — run:
+  ```bash
+  grep -rl "fileBaseName" packages/ src/ --include="*.tsx" | grep -v "\.spec\.tsx\|\.test\.tsx\|spec-helpers"
+  ```
+  Replace `fileBaseName` with the changed file's name minus its extension (e.g. `rosaHcpWizardStrings.defaults` for `rosaHcpWizardStrings.defaults.ts`). If the grep returns any result, the `.ts` change is visual.
 
 **Non-visual** — skip screenshots (still run full test suite):
-- Pure logic in `*.ts` / `*.test.ts` with no component or story changes
+- Modified a `*.ts` / `*.test.ts` file that is **not** imported by any non-test `.tsx` component file (grep returns nothing)
 - Dependency-only bumps, config/CI, docs-only
 - Refactors with identical rendered output
 
@@ -74,16 +79,15 @@ When unsure → treat as visual.
 
 **This is a component library. No HCC dev-proxy, no SSO login, no live console environment.**
 
-**Order:** implement → automated checks → [visual: Storybook screenshots + upload] → push → PR with Screenshots URLs.
-
-Run sequentially from repo root:
+**Order — all steps are mandatory, run sequentially:**
 
 1. `npm run lint` — lint `packages/**/*.{ts,tsx}`
 2. `npm run type-check` — root + workspace TypeScript
 3. `npm run test:all` — jest + Playwright CT (**jest does NOT run in CI** — always run locally before PR)
 4. `npm run build` — root library
    - When changing a workspace package, also run: `npm run build -w @redhat-cloud-services/nxtcm-dashboard` or `npm run build -w @redhat-cloud-services/nxtcm-rosa-hcp-wizard`
-5. **Visual changes only** — Storybook screenshots (see below). Upload before opening PR.
+5. **Run visual change detection** (see section above). If the change is visual: capture Storybook screenshots and upload them before opening the PR. If non-visual: write `N/A — no visual changes` in the PR Screenshots section. Either way, do not skip this step.
+6. Push branch and open PR with Screenshots section populated.
 
 ### Playwright CT (component tests)
 
@@ -154,17 +158,21 @@ Capture **before** the first implementation commit (branch still matches main), 
 
 2. **Find story URL** — resolve which story renders the change (do not require a story-file diff):
 
-   **Discovery order:**
+   **Discovery order — MUST follow all steps before giving up:**
    1. Co-located story — if you changed `Foo.tsx` / `Foo.spec.tsx`, look for `Foo.stories.tsx` next to it (even if that story file was not modified).
-   2. Else consumer stories — search `*.stories.tsx` for imports/usages of the changed component; screenshot the story that best shows the change (or multiple if needed; note which in the PR).
-   3. Else no Storybook coverage — Screenshots `N/A — no Storybook coverage` and skip this section. Do not invent a story URL.
+   2. **Else consumer stories — this step is MANDATORY, do not skip it.** Run:
+      ```bash
+      grep -rl "ComponentName" packages/ src/ --include="*.stories.tsx"
+      ```
+      Replace `ComponentName` with the actual changed component's name (e.g. `Details`, `WizSelect`). If the grep returns files:
+      - **One result** → use it.
+      - **Multiple results** → pick the file that shares the most path segments with the changed file (same package first, then same subdirectory). If the change visibly affects multiple distinct UIs (e.g. a shared component used across several steps), screenshot each relevant story and note which stories were captured in the PR. Otherwise screenshot only the closest match.
+   3. Else no Storybook coverage — only reach this if both steps above returned nothing. Write `N/A — no Storybook coverage` in the PR Screenshots section. Do not invent a story URL.
 
    **Build the iframe URL** from the chosen `*.stories.tsx`:
    - CSF3 `title` → story ID: lowercase, `/` → `-` (e.g. `Components/Dashboard/Widget` → `components-dashboard-widget`)
    - Variant → first named export, kebab-cased (often `--default`)
    - iframe URL: `http://127.0.0.1:6006/iframe.html?id=<story-id>--<variant>&viewMode=story`
-
-   Multiple consumer stories → capture before/after for the best representative story (or more than one if the change spans distinct UIs); note which in the PR.
 
 3. **Navigate + screenshot** via chrome-devtools MCP:
    - `navigate_page` → story iframe URL
