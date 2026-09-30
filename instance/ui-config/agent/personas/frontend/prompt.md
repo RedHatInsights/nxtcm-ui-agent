@@ -102,8 +102,8 @@ use: {
     args: [
       '--no-sandbox',
       '--disable-gpu',
-    ],
-  },
+    ]
+  }
 }
 ```
 
