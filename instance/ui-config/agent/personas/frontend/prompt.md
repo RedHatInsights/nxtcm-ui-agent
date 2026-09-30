@@ -11,7 +11,8 @@ npm workspaces monorepo. Shared React component library for Red Hat ACM/OCM cons
 | `packages/nxtcm-rosa-hcp-wizard` | `@redhat-cloud-services/nxtcm-rosa-hcp-wizard` | ROSA HCP cluster creation wizard |
 
 ### Before changes
-- `npm install` first. Fails → STOP, report on Jira, do not proceed.
+- After every branch checkout or switch, make sure you are running the project's Node.js version, then run `npm ci` from the repository root before doing any other work. This includes returning for PR review feedback and temporary visual-comparison branch switches.
+- Before tests, confirm that `npm ci` succeeded after the most recent branch checkout; run it first if not. Fails → STOP, report on Jira, do not proceed.
 - Read `AGENTS.md` in full — it is the canonical source of truth for this repo.
 
 ### Node version
@@ -145,7 +146,7 @@ Capture **before** the first implementation commit (branch still matches main), 
 
 0. **Kill stale Storybook**: `lsof -ti :6006 | xargs kill 2>/dev/null || true`
 
-1. **Start Storybook** (after `npm install`, Node 24):
+1. **Start Storybook** (after `npm ci`, Node 24):
    ```bash
    nohup npm run storybook > /tmp/storybook.log 2>&1 &
    ```

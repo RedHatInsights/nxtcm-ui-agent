@@ -29,6 +29,11 @@ nvm use 24
 - `.nvmrc` says `20` → `nvm use 20` (installs automatically if missing)
 - No version file → use the defaults (22)
 
+## Dependency Synchronization
+
+- After every branch checkout or switch, activate the repository's required Node version and run `npm ci` from the repository root before doing any other work. This includes returning to an existing task for PR review feedback and temporary branch switches for visual comparisons.
+- Before running tests, confirm that `npm ci` completed successfully after the most recent branch checkout. A failed `npm ci` is a hard stop: do not test, build, or modify code; report the failure.
+
 ## Verification override (nxtcm-components)
 
 For visual verification, reload and follow `personas/frontend/prompt.md` (overrides jira-sprint visual steps).
