@@ -6,7 +6,6 @@ npm workspaces monorepo. Shared React component library for Red Hat ACM/OCM cons
 
 | dir | npm name | purpose |
 |-----|----------|---------|
-| root `src/` | `nxtcm-components` | shared console UI (breadcrumbs, page header, wizards) |
 | `packages/nxtcm-dashboard` | `@redhat-cloud-services/nxtcm-dashboard` | ACM/OCM home dashboard widgets |
 | `packages/nxtcm-rosa-hcp-wizard` | `@redhat-cloud-services/nxtcm-rosa-hcp-wizard` | ROSA HCP cluster creation wizard |
 
@@ -29,7 +28,7 @@ npm workspaces monorepo. Shared React component library for Red Hat ACM/OCM cons
 
 ### File conventions (co-location)
 
-New components go under `src/components/` or `packages/*/src/`:
+New components go under `packages/*/src/`:
 
 ```
 ComponentName/
@@ -43,7 +42,7 @@ ComponentName/
 ### Where to put new code
 - Dashboard home widgets → `packages/nxtcm-dashboard/src/`
 - ROSA HCP wizard steps/fields/validation → `packages/nxtcm-rosa-hcp-wizard/src/`
-- Shared console UI used across features → `src/components/` or `src/utilities/`
+- Shared console UI used across features → `packages/nxtcm-dashboard/src/` or `packages/nxtcm-rosa-hcp-wizard/src/`
 
 ### Path aliases
 - `@/` → `src/`
@@ -57,21 +56,14 @@ Configured in: `tsconfig.json`, `vite.config.ts`, `playwright-ct.config.ts`, `.s
 
 Before verification, decide if the ticket introduces **visual changes** (screenshots required on PR).
 
-**Visual change** — any of:
-- Modified/added `*.tsx` component files (not test-only files unless rendered output changes)
-- Modified/added `*.stories.tsx`, CSS/styling, or layout-related props
-- Jira title/description/AC mentions UI, layout, styling, design, appearance, screenshot, visual
-- New component or visible behavior change in an existing component
-- Modified a `*.ts` file (non-test) that is imported by at least one `*.tsx` component file — run:
-  ```bash
-  grep -rl "fileBaseName" packages/ src/ --include="*.tsx" | grep -v "\.spec\.tsx\|\.test\.tsx\|spec-helpers"
-  ```
-  Replace `fileBaseName` with the changed file's name minus its extension (e.g. `rosaHcpWizardStrings.defaults` for `rosaHcpWizardStrings.defaults.ts`). If the grep returns any result, the `.ts` change is visual.
+**Visual change** — screenshots required if any modified/added file lives under `packages/*/src/` and is not excluded below.
 
-**Non-visual** — skip screenshots (still run full test suite):
-- Modified a `*.ts` / `*.test.ts` file that is **not** imported by any non-test `.tsx` component file (grep returns nothing)
-- Dependency-only bumps, config/CI, docs-only
-- Refactors with identical rendered output
+**Non-visual** — skip screenshots (still run full test suite) if every changed file under `packages/*/src/` is one of:
+- A test or spec file: `*.test.ts`, `*.test.tsx`, `*.spec.ts`, `*.spec.tsx`
+- A spec-helper: `*.spec-helpers.tsx`
+- A fixture file: `*.fixtures.ts`
+
+Also non-visual: dependency-only bumps, config/CI (`vite.config.ts`, `playwright*.config.ts`, etc.), docs, `scripts/`, `utils/`, `types/`, or changes that touch nothing under `packages/*/src/`.
 
 When unsure → treat as visual.
 
@@ -91,7 +83,7 @@ When unsure → treat as visual.
 
 ### Playwright CT (component tests)
 
-Primary test method. Matches `src/**/*.spec.tsx` and `packages/nxtcm-*/src/**/*.spec.tsx`.
+Primary test method. Matches `packages/nxtcm-*/src/**/*.spec.tsx`.
 
 ```bash
 export PLAYWRIGHT_BROWSERS_PATH=/opt/pw-browsers
@@ -160,14 +152,19 @@ Capture **before** the first implementation commit (branch still matches main), 
 
    **Discovery order — MUST follow all steps before giving up:**
    1. Co-located story — if you changed `Foo.tsx` / `Foo.spec.tsx`, look for `Foo.stories.tsx` next to it (even if that story file was not modified).
-   2. **Else consumer stories — this step is MANDATORY, do not skip it.** Run:
+   2. **Else traverse upward through the import graph** (max 3 levels). Starting from the changed file(s), find what imports them and repeat — stopping when you find files with a co-located `*.stories.tsx`:
       ```bash
-      grep -rl "ComponentName" packages/ src/ --include="*.stories.tsx"
+      grep -rl "fileBaseName" packages/ --include="*.ts" --include="*.tsx" | grep -v "\.spec\.\|\.spec-helpers\.\|\.test\.\|\.fixtures\.\|\.stories\.\|index\."
       ```
-      Replace `ComponentName` with the actual changed component's name (e.g. `Details`, `WizSelect`). If the grep returns files:
+      Replace `fileBaseName` with the changed file's name minus its extension. For each result that has a co-located story, use that story. For results without a story, run the grep again using *their* basenames — but skip `index.ts` / `index.tsx` files (barrel files fan out too broadly). Stop after 3 levels whether or not stories are found.
+   3. **Else consumer stories** — if traversal found no stories, run a name-grep as a fallback:
+      ```bash
+      grep -rl "ComponentName" packages/ --include="*.stories.tsx"
+      ```
+      Replace `ComponentName` with the changed component's name. If the grep returns files:
       - **One result** → use it.
       - **Multiple results** → pick the file that shares the most path segments with the changed file (same package first, then same subdirectory). If the change visibly affects multiple distinct UIs (e.g. a shared component used across several steps), screenshot each relevant story and note which stories were captured in the PR. Otherwise screenshot only the closest match.
-   3. Else no Storybook coverage — only reach this if both steps above returned nothing. Write `N/A — no Storybook coverage` in the PR Screenshots section. Do not invent a story URL.
+   4. Else no Storybook coverage — only reach this if all steps above returned nothing. Write `N/A — no Storybook coverage` in the PR Screenshots section. Do not invent a story URL.
 
    **Build the iframe URL** from the chosen `*.stories.tsx`:
    - CSF3 `title` → story ID: lowercase, `/` → `-` (e.g. `Components/Dashboard/Widget` → `components-dashboard-widget`)
