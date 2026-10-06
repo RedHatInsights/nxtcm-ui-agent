@@ -1,0 +1,11 @@
+{
+  "$schema": "https://docs.renovatebot.com/renovate-schema.json",
+  "packageRules": [
+    {
+      "matchManagers": ["git-submodules"],
+      "matchDepNames": ["dev-bot"],
+      "matchUpdateTypes": ["digest"],
+      "automerge": true
+    }
+  ]
+}
