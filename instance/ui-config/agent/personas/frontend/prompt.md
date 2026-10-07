@@ -54,8 +54,6 @@ Configured in: `tsconfig.json`, `vite.config.ts`, `playwright-ct.config.ts`, `.s
 
 ### Visual change detection
 
-Before verification, decide if the ticket introduces **visual changes** (screenshots required on PR).
-
 **Visual change** — screenshots required if any modified/added file lives under `packages/*/src/` and is not excluded below.
 
 **Non-visual** — skip screenshots (still run full test suite) if every changed file under `packages/*/src/` is one of:
