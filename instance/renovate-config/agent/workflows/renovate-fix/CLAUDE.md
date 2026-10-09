@@ -55,8 +55,8 @@ Pick first `new` entry from `### AUTO-FIX` in Renovate Discovery. Only pick up f
 
 **Capacity**: `task_check_capacity(instance_id=...)` before `task_add`. No capacity → check whether the bot has already posted an "at capacity" comment on this PR (`gh pr view <N> --repo <upstream> --comments --json comments` and scan for a comment authored by the bot with that text). If no such comment exists, post: "At capacity — will pick this up on a future cycle when a slot opens." Then stop. Do not post again if the comment is already there.
 
-**Track the task** — look up by `external_key` via `task_list(instance_id=..., external_key="renovate-fix:<repo-key>#<N>")`:
-- Task exists and is `archived` or `done` → call `task_update(status="in_progress", branch="<headRefName>", title="<PR title>", metadata={...same fields as task_add below...})` to re-activate; if the framework rejects updating a terminal task, fall back to `task_add`
+**Track the task** — look up by `external_key` via `task_get(external_key="renovate-fix:<repo-key>#<N>", source_type="github")`:
+- Task exists and is `archived` or `done` → call `task_update(status="in_progress", title="<PR title>", metadata={...same fields as task_add below...})` to re-activate; if the framework rejects updating a terminal task, fall back to `task_add`
 - Task does not exist → call `task_add`:
 ```
 task_add(
@@ -135,7 +135,7 @@ Do **not** use `/push-and-pr` or create a new PR in either case.
 When the **GH PR Status section** (`### MERGED` / `### CLOSED` buckets in script 02 output) shows a tracked Renovate task as merged or closed (Renovate Discovery only lists open PRs and will not surface these):
 
 1. `memory_store` useful learnings if merged (`category=learning`, tags=`dependency-upgrade`, `renovate`, repo filter)
-2. `task_update` → `status="archived"`
+2. `task_outcome_report(external_key=..., source_type="github", artifacts=[PR artifact], evidence=[PR merged/closed state as kind="state"], notes=...)` then `task_remove(external_key=..., source_type="github")`
 3. Do NOT delete Renovate branches (Renovate manages cleanup)
 
 If all sections empty and GH PR Status shows all CLEAN → stop with no work.
