@@ -74,16 +74,60 @@ objects:
           app.kubernetes.io/part-of: devbot
       spec:
         automountServiceAccountToken: false
+        # Seed writable emptyDirs from the image so readOnlyRootFilesystem
+        # does not hide baked-in HOME/app content or break nvm installs.
+        initContainers:
+        - name: seed-writable
+          image: ${BOT_IMAGE}:${IMAGE_TAG}
+          command:
+          - /bin/bash
+          - -c
+          - |
+            set -euo pipefail
+            mkdir -p /mnt/home /mnt/nvm
+            cp -a /home/botuser/. /mnt/home/
+            if [ -d /usr/local/nvm ]; then
+              cp -a /usr/local/nvm/. /mnt/nvm/
+            fi
+          securityContext:
+            runAsNonRoot: true
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            seccompProfile:
+              type: RuntimeDefault
+            capabilities:
+              drop: ["ALL"]
+          volumeMounts:
+          - name: bot-home
+            mountPath: /mnt/home
+          - name: nvm
+            mountPath: /mnt/nvm
+          resources:
+            requests:
+              cpu: 100m
+              memory: 256Mi
+            limits:
+              cpu: "1"
+              memory: 1Gi
         containers:
         - name: bot
           image: ${BOT_IMAGE}:${IMAGE_TAG}
           securityContext:
             runAsNonRoot: true
             allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
             seccompProfile:
               type: RuntimeDefault
             capabilities:
               drop: ["ALL"]
+          volumeMounts:
+          # Scratch (/tmp) + agent workdir (HOME covers app/repos clones/builds)
+          - name: tmp
+            mountPath: /tmp
+          - name: bot-home
+            mountPath: /home/botuser
+          - name: nvm
+            mountPath: /usr/local/nvm
           env:
           - name: BOT_LABEL
             value: ${BOT_LABEL}
@@ -196,6 +240,18 @@ objects:
               cpu: "4"
               memory: 6Gi
               ephemeral-storage: 8Gi
+        volumes:
+        - name: tmp
+          emptyDir:
+            sizeLimit: 1Gi
+        # HOME + app workdir (repos/data/credentials); sized for clones/builds
+        - name: bot-home
+          emptyDir:
+            sizeLimit: 6Gi
+        # Writable nvm store so `nvm install` works under read-only rootfs
+        - name: nvm
+          emptyDir:
+            sizeLimit: 1Gi
 
 # --- NetworkPolicy: Bot can only reach proxy + memory-server ---
 - apiVersion: networking.k8s.io/v1
