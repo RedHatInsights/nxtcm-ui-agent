@@ -83,9 +83,9 @@ objects:
           - |
             set -euo pipefail
             mkdir -p /mnt/home /mnt/nvm
-            cp -a /home/botuser/. /mnt/home/
+            cp -a --no-preserve=timestamps /home/botuser/. /mnt/home/
             if [ -d /usr/local/nvm ]; then
-              cp -a /usr/local/nvm/. /mnt/nvm/
+              cp -a --no-preserve=timestamps /usr/local/nvm/. /mnt/nvm/
             fi
           securityContext:
             runAsNonRoot: true
