@@ -1,13 +1,18 @@
 #!/usr/bin/env python3
-"""GH PR status for renovate-fix — always re-enter on CI failure."""
+"""GH PR status for renovate-fix — skip PRs with merge conflicts (Renovate rebases them)."""
 
 import gh_pr_status
 
-
-def _always_retry_ci(_enriched):
-    """Partial CI fixes must get another session; ignore last_addressed gate."""
-    return True
+_orig_enrich_gh = gh_pr_status.enrich_gh
 
 
-gh_pr_status.ci_failure_needs_session = _always_retry_ci
+def _enrich_skip_conflicted(task):
+    """Skip conflicted PRs — Renovate rebases on its own; CI-only issues re-surface after rebase."""
+    result = _orig_enrich_gh(task)
+    if result is not None and "conflict" in result.get("issues", []):
+        return None
+    return result
+
+
+gh_pr_status.enrich_gh = _enrich_skip_conflicted
 gh_pr_status.main()

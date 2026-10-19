@@ -20,15 +20,19 @@ ONE item/cycle. Read preflight input (Renovate Discovery + GH PR Status sections
 
 Active statuses: `in_progress`, `pr_open`, `pr_changes`. Suspended: `paused` (see below). Terminal: `archived`, `done`.
 
-**`paused` has two sub-modes distinguished by `paused_reason`:**
+**`paused` has sub-modes distinguished by `paused_reason`:**
 - `transient:*` — temporary blocker (network, registry); auto-retried next cycle via AUTO-FIX
 - `blocked:*` — structural blocker (peer dep conflict, unfixable API); waiting for human action; does NOT auto-retry
+- any other non-empty value (e.g. `"Paused via dashboard"`) — manual or unclassified pause; does NOT auto-retry; requires human to resume or close the task
+- (empty) — no reason recorded; treated as retryable for backwards compatibility
 
 **Ignore core Jira / Primary Label sections** — this workflow never uses Jira or Atlassian MCP.
 
 ## Priority 1 — Reviewer Comments
 
 Pick first task from `### FEEDBACK` bucket in GH PR Status. A human responded — address it before doing anything else.
+
+**Also check `### CI FAILING` for hidden feedback**: The shared GH PR Status preflight places a PR with CI failures into `CI FAILING` even when it also has new human comments. Before doing CI repair on any `CI FAILING` task, look at its `pr_comments` section in the preflight output. If there are human comments since `last_addressed`, treat the task as P1 first (address the feedback, then let the next cycle handle CI repair).
 
 1. Read the reviewer's comment carefully.
 2. If they request a code change: run Fix Workflow steps 1–5 first (nvm/clone/checkout/npm install/load AGENTS.md + prompt.md) to prepare the local branch, make the change, run verification (see Fix Workflow step 8), commit, push to PR head repo (see Fix Workflow step 10), post a brief response comment. `task_update(last_addressed=now)`.
@@ -41,7 +45,7 @@ Pick first task from `### FEEDBACK` bucket in GH PR Status. A human responded �
 **`### CI FAILING` (GH PR Status) takes precedence over `### AUTO-FIX` resume entries.** Check CI FAILING first; only fall through to AUTO-FIX resume if CI FAILING is empty.
 
 - A task in `### CI FAILING` in GH PR Status — active tracked task that still needs attention; pick the first entry.
-- A `resume:paused` entry in `### AUTO-FIX` in Renovate Discovery — previously started and suspended; eligible because the `paused_reason` starts with `transient:` or has no recorded reason (treated as safe to retry). Do NOT resume tasks whose `paused_reason` starts with `blocked:` — those wait for human action.
+- A `resume:paused` entry in `### AUTO-FIX` in Renovate Discovery — previously started and suspended; eligible because the `paused_reason` starts with `transient:` or has no recorded reason (treated as safe to retry). Tasks with `blocked:*` reasons or manual pauses (any other non-empty reason) never appear here — they are filtered out by the preflight and require human action to resume.
 
 Finish existing commitments before taking on new work.
 
@@ -51,9 +55,11 @@ Then run the **Fix Workflow** below.
 
 ## Priority 3 — New Untracked PRs
 
-Pick first `new` entry from `### AUTO-FIX` in Renovate Discovery. Only pick up fresh work when P1 and P2 are both empty.
+Pick first `new` or `resume:done` entry from `### AUTO-FIX` in Renovate Discovery. Only pick up fresh work when P1 and P2 are both empty.
 
-**Capacity**: `task_check_capacity(instance_id=...)` before `task_add`. No capacity → check whether the bot has already posted an "at capacity" comment on this PR (`gh pr view <N> --repo <upstream> --comments --json comments` and scan for a comment authored by the bot with that text). If no such comment exists, post: "At capacity — will pick this up on a future cycle when a slot opens." Then stop. Do not post again if the comment is already there.
+A `resume:done` entry means the task previously reached a terminal `done` state (e.g. was closed without going through the outcome-report path). Re-activate it the same way as a `done` task below — do NOT create a duplicate with `task_add` unless `task_update` is rejected.
+
+**Capacity**: `task_check_capacity(instance_id=...)` before `task_add` (and before re-activating a `done` task). No capacity → check whether the bot has already posted an "at capacity" comment on this PR (`gh pr view <N> --repo <upstream> --comments --json comments` and scan for a comment authored by the bot with that text). If no such comment exists, post: "At capacity — will pick this up on a future cycle when a slot opens." Then stop. Do not post again if the comment is already there.
 
 **Track the task** — look up by `external_key` via `task_get(external_key="renovate-fix:<repo-key>#<N>", source_type="github")`:
 - Task exists and is `archived` or `done` → call `task_update(status="in_progress", title="<PR title>", metadata={...same fields as task_add below...})` to re-activate; if the framework rejects updating a terminal task, fall back to `task_add`
@@ -132,13 +138,23 @@ Do **not** use `/push-and-pr` or create a new PR in either case.
 
 ## Priority 4 — Merged / Closed PR Cleanup
 
-When the **GH PR Status section** (`### MERGED` / `### CLOSED` buckets in script 02 output) shows a tracked Renovate task as merged or closed (Renovate Discovery only lists open PRs and will not surface these):
+Unlike P1–P3, P4 processes **all** matching items in one pass.
+
+**Active task cleanup**: When the **GH PR Status section** (`### MERGED` / `### CLOSED` buckets in script 02 output) shows tracked Renovate tasks as merged or closed, for each one:
 
 1. `memory_store` useful learnings if merged (`category=learning`, tags=`dependency-upgrade`, `renovate`, repo filter)
 2. `task_outcome_report(external_key=..., source_type="github", artifacts=[PR artifact], evidence=[PR merged/closed state as kind="state"], notes=...)` then `task_remove(external_key=..., source_type="github")`
 3. Do NOT delete Renovate branches (Renovate manages cleanup)
 
-If all sections empty and GH PR Status shows all CLEAN → stop with no work.
+**Paused task cleanup**: Script 02 only checks active tasks — a paused task whose PR merged or closed never surfaces in `### MERGED` / `### CLOSED` automatically. Run this after the active cleanup above (or immediately when GH PR Status is all CLEAN):
+- Call `task_list(instance_id=..., source_type="github", status="paused")`.
+- For each returned task whose `external_key` starts with `renovate-fix:`, extract the upstream repo and PR number from `metadata.prs[0]` (or parse `external_key` as `renovate-fix:<repo-key>#<N>` and look up the repo-key in `project-repos.json` to get the upstream URL).
+- Call `gh pr view <N> --repo <upstream> --json state`.
+- If `MERGED`: follow the same outcome-report → archive flow (steps 1–2 above).
+- If `CLOSED`: archive with `task_outcome_report` + `task_remove` (no `memory_store` needed unless there are useful learnings).
+- If still `OPEN`: leave as-is — the task remains paused until a human acts or Renovate rebases.
+
+Once both cleanups are done (or there was nothing to do) → stop with no work.
 
 ## Rules
 
