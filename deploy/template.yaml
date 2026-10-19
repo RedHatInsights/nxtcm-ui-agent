@@ -155,7 +155,7 @@ objects:
             valueFrom:
               secretKeyRef:
                 name: devbot-secrets
-                key: slack-webhook
+                key: slack-webhook-nxtcm
                 optional: true
           # Proxy — shared pod deployed by platform-frontend-ai-dev
           - name: PROXY_HOST
