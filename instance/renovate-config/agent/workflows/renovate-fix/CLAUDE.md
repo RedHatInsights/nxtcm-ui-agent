@@ -30,12 +30,14 @@ Active statuses: `in_progress`, `pr_open`, `pr_changes`. Suspended: `paused` (se
 
 ## Priority 1 — Reviewer Comments
 
-Pick first task from `### FEEDBACK` bucket in GH PR Status. A human responded — address it before doing anything else.
+Pick first task from **`### FEEDBACK`** or **`### BLOCKED FEEDBACK`** bucket in GH PR Status. A human responded — address it before doing anything else.
+
+**`### BLOCKED FEEDBACK`** contains previously paused (blocked) tasks that have received new human comments since the last addressed timestamp. Always `task_update(status="in_progress")` before doing any new work on these tasks to re-activate them.
 
 **Also check `### CI FAILING` for hidden feedback**: The shared GH PR Status preflight places a PR with CI failures into `CI FAILING` even when it also has new human comments. Before doing CI repair on any `CI FAILING` task, look at its `pr_comments` section in the preflight output. If there are human comments since `last_addressed`, treat the task as P1 first (address the feedback, then let the next cycle handle CI repair).
 
 1. Read the reviewer's comment carefully.
-2. If they request a code change: run Fix Workflow steps 1–5 first (nvm/clone/checkout/npm install/load AGENTS.md + prompt.md) to prepare the local branch, make the change, run verification (see Fix Workflow step 8), commit, push to PR head repo (see Fix Workflow step 10), post a brief response comment. `task_update(last_addressed=now)`.
+2. If they request a code change or indicate the previous blocker is resolved (e.g. "fork was created for you, try to open a PR from your fork"): run Fix Workflow steps 1–5 first (nvm/clone/checkout/npm install/load AGENTS.md + prompt.md) to prepare the local branch, make the change (or resume from where the workflow was blocked), run verification (see Fix Workflow step 8), commit, push and open fix PR (see Fix Workflow step 10), post a brief response comment. `task_update(last_addressed=now)`.
    - If `npm install` fails during this preparation (step 4): post a PR comment explaining the failure and that the requested change cannot be applied until install is resolved. `task_update(status="paused", paused_reason="blocked: npm install failed during P1 response: <stderr summary>", last_addressed=now)`. Stop — do not attempt the code change.
 3. If they provide guidance on an unfixable situation (e.g. "close this PR", "pin to older version"): do not change dependency versions. Post a comment acknowledging and explaining what action is needed from them (the bot can't close PRs or change Renovate's version pins). `task_update(last_addressed=now)`.
 4. If the comment is informational with no action needed: post a brief acknowledgement. `task_update(last_addressed=now)`.
@@ -116,23 +118,47 @@ Used by P2 (tracked/resumed tasks) and P3 (new tasks). Task tracking is handled 
 9. Stage and commit all changed files. Always include `package-lock.json` if it changed (e.g. after an `npm install` with `overrides`). If `package.json` was modified (e.g. `overrides` entry added), include it too. Use a message that reflects the nature of the fix:
    - Code/type/test fix: `fix(deps): resolve CI for renovate bump <package>`
    - Overrides-only fix: `fix(deps): add overrides to resolve peer conflict for <package>`
-10. Push to the **PR head repository** (NOT fork `origin`, NOT `bot/<KEY>`):
+10. Push the fix to the **bot's fork** (`origin`) and open a new PR from it targeting the Renovate PR's base branch:
     ```bash
-    # head_owner, head_repo, head_ref, is_cross_repository are in preflight metadata for P3 tasks.
-    # For P2 tasks (coming from task metadata), resolve if not stored:
-    gh pr view <N> --repo <upstream> --json headRefName,headRepository,headRepositoryOwner,isCrossRepository
-    # Push remote = headRepositoryOwner/headRepository (usually upstream, not the bot fork)
-    git remote get-url head-pr 2>/dev/null || git remote add head-pr "https://github.com/<head_owner>/<head_repo>.git"
-    git push head-pr HEAD:<headRefName>
+    # origin is the bot's fork (project-repos.json "url" field); push the fix branch there
+    git push origin HEAD:<headRefName>
+
+    # Determine the base branch from the Renovate PR (do NOT hardcode 'main')
+    upstream_path=$(git remote get-url upstream | sed 's|.*github\.com[:/]||; s|\.git$||')
+    base_branch=$(gh pr view <N> --repo "$upstream_path" --json baseRefName --jq .baseRefName)
+
+    # Determine fork owner via gh CLI — works for both HTTPS and SSH remotes
+    fork_owner=$(gh api user --jq .login)
+
+    # Create the fix PR (gh pr create exits non-zero if a PR already exists — that is expected)
+    gh pr create \
+      --repo "$upstream_path" \
+      --head "${fork_owner}:${headRefName}" \
+      --base "$base_branch" \
+      --title "fix(deps): resolve CI for Renovate bump (${headRefName})" \
+      --body "CI fix for Renovate PR #<N> (<upstream-pr-url>). <summary of what was fixed>" || true
+
+    # Retrieve the URL of the open fix PR (new or pre-existing)
+    # Use '// empty' so jq returns '' instead of 'null' when the array is empty
+    fix_pr_url=$(gh pr list \
+      --repo "$upstream_path" \
+      --head "${fork_owner}:${headRefName}" \
+      --state open \
+      --json url --jq '.[0].url // empty')
+
+    # If still empty, the PR was not created and does not exist — treat as a real failure
+    if [ -z "$fix_pr_url" ]; then
+      # Post a PR comment and pause the task
+      task_update(status="paused", paused_reason="blocked: gh pr create failed and no open fix PR found")
+      exit 1
+    fi
     ```
-11. `task_update(status="pr_open", last_addressed=now, metadata.last_step="ci_fix_pushed")`
-12. Post brief PR comment: what was fixed + verification run
+11. `task_update(status="pr_open", last_addressed=now, metadata.last_step="ci_fix_pushed", metadata.fix_pr={"url": "<fix_pr_url>"})`
+12. Post comment on the **Renovate PR** (#N): what was fixed, verification results, and the link to the new fix PR on the fork.
 
-On push failure — inspect the error before deciding how to handle:
-- **Auth/permission error** (HTTP 403, "not authorized", "remote rejected"): `task_update(status="paused", paused_reason="blocked: push rejected — no write access to <head_owner>/<head_repo>")`. Post a PR comment explaining that the bot lacks push access and a human needs to grant it or push manually. Stop — do not retry.
+On push failure to `origin` — inspect the error before deciding:
+- **Auth/permission error** (HTTP 403, "remote rejected"): `task_update(status="paused", paused_reason="blocked: fork push rejected — check bot fork access")`. Post a PR comment explaining the blocker. Stop — do not retry.
 - **Transient error** (network timeout, temporary server error): `task_update(metadata.last_step="push_failed")`, post a PR comment, keep `in_progress`. Will retry next cycle via `### CI FAILING`.
-
-Do **not** use `/push-and-pr` or create a new PR in either case.
 
 **CI still red after push**: next cycle re-enters via `### CI FAILING` (this workflow always retries CI — partial fixes continue).
 
@@ -158,16 +184,16 @@ Once both cleanups are done (or there was nothing to do) → stop with no work.
 
 ## Rules
 
-### Security override — Renovate head pushes (supersedes core)
+### Security override — Fork push and fix PR (supersedes core)
 
-Core Security Rules say "NEVER push to branches other than `bot/<TICKET-KEY>`". **That rule does not apply to this workflow.**
+Core Security Rules say "NEVER push to branches other than `bot/<TICKET-KEY>`" and "NEVER open a new PR". **Neither rule applies to this workflow.**
 
 For renovate-fix only:
-- **Required**: push to the Renovate PR head ref on the PR **head repository** (`head_owner`/`head_repo` + `headRefName` / `metadata.head_ref`)
-- **Forbidden**: create `bot/` branches, open a new PR, or use `/push-and-pr`
-- **Still forbidden**: push to `main`/`master`
+- **Required**: push the fix to the **bot's fork** (`origin` remote, same branch name as `headRefName`), then open a PR from the fork to `upstream/main` via `gh pr create`
+- **Forbidden**: push directly to the upstream Renovate branch (`headRefName` on `headRepositoryOwner/headRepository`); use `/push-and-pr` skill; create `bot/` branches
+- **Still forbidden**: push to `main`/`master` on either the fork or upstream
 
-This override is intentional and authorized for dependency CI repair on existing Renovate PRs.
+This override is intentional and authorized: the bot does not have write access to the upstream repo.
 
 ### Other rules
 
@@ -179,4 +205,4 @@ This override is intentional and authorized for dependency CI repair on existing
 - **Do NOT re-fetch** data already in preflight input
 - Reload `personas/frontend/prompt.md` before fixing nxtcm-components
 - Use `gh pr comment` for human-facing updates (normal language, not caveman mode)
-- Renovate may rebase/force-update its branches later and overwrite bot commits — re-fix on next cycle if CI fails again
+- Renovate may rebase its branch; if that causes new CI failures on its PR, the fix PR on the fork will need to be rebased — re-run the fix workflow on the next cycle if CI re-fails
