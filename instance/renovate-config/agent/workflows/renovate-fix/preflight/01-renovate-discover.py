@@ -12,7 +12,6 @@ sys.path.insert(0, str(_wf_root / "lib"))
 from common import (
     INSTANCE_ID,
     MEMORY_URL,
-    get_capacity,
     http_get,
     load_project_repos,
     load_state,
@@ -88,7 +87,13 @@ def main():
     needs_slot = [e for e in auto_fix if e.get("existing_status") != "paused"]
     free_resume = [e for e in auto_fix if e.get("existing_status") == "paused"]
     if needs_slot and not free_resume:
-        active_n, max_n = get_capacity()
+        # Use the already-fetched tasks list to count active slots rather than calling
+        # get_capacity(), which returns (0, 10) when its API request fails and would
+        # incorrectly allow launching when capacity is actually unknown.
+        max_n = 10
+        active_n = len(
+            [t for t in tasks if t.get("status") in ("in_progress", "pr_open", "pr_changes")]
+        )
         if active_n >= max_n:
             output_result(
                 "skip",

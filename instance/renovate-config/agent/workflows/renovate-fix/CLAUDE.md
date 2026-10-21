@@ -147,7 +147,7 @@ Unlike P1–P3, P4 processes **all** matching items in one pass.
 3. Do NOT delete Renovate branches (Renovate manages cleanup)
 
 **Paused task cleanup**: Script 02 only checks active tasks — a paused task whose PR merged or closed never surfaces in `### MERGED` / `### CLOSED` automatically. Run this after the active cleanup above (or immediately when GH PR Status is all CLEAN):
-- Call `task_list(instance_id=..., source_type="github", status="paused")`.
+- Call `task_list(instance_id=..., status="paused")` (`task_list` does not accept `source_type`; filter by `external_key` prefix instead).
 - For each returned task whose `external_key` starts with `renovate-fix:`, extract the upstream repo and PR number from `metadata.prs[0]` (or parse `external_key` as `renovate-fix:<repo-key>#<N>` and look up the repo-key in `project-repos.json` to get the upstream URL).
 - Call `gh pr view <N> --repo <upstream> --json state`.
 - If `MERGED`: follow the same outcome-report → archive flow (steps 1–2 above).
