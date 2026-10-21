@@ -2,18 +2,48 @@
 """Discover failing Renovate PRs on configured repos."""
 
 import sys
+import urllib.parse
 from pathlib import Path
 
 # Helpers live in ../lib (not preflight/) so discovery does not execute them.
 _wf_root = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(_wf_root / "lib"))
 
-from common import get_tasks, load_project_repos, output_result
+from common import (
+    INSTANCE_ID,
+    MEMORY_URL,
+    http_get,
+    load_project_repos,
+    load_state,
+    output_result,
+    save_state,
+)
 from renovate_discover import discover_failing_renovate_prs, format_pr_line
 
 
 def main():
-    tasks = get_tasks()
+    # Fetch tasks with explicit error detection: if the task API is unavailable
+    # we cannot safely determine which PRs are already tracked or paused, so skip
+    # rather than risk treating a tracked (or paused) PR as new untracked work.
+    state = load_state()
+    if "tasks" in state:
+        tasks = state["tasks"]
+    else:
+        instance_param = (
+            f"&instance_id={urllib.parse.quote(INSTANCE_ID)}" if INSTANCE_ID else ""
+        )
+        data = http_get(
+            f"{MEMORY_URL}/api/tasks?exclude_status=archived&limit=50{instance_param}"
+        )
+        if data is None:
+            output_result(
+                "skip",
+                "Renovate discovery: task API unavailable — skipping to avoid treating tracked work as new",
+            )
+            return
+        tasks = data.get("items", [])
+        save_state({"tasks": tasks})
+
     repos = load_project_repos()
     if not repos:
         output_result("skip", "Renovate discovery: no repos in project-repos.json")
@@ -46,6 +76,31 @@ def main():
             f"Renovate discovery: {len(tracked)} failing PR(s) already tracked (see GH PR Status)",
         )
         return
+
+    # Capacity pre-check: avoid starting a session when we're at capacity and there
+    # is no free work to process.
+    #
+    # Only resume:paused (transient) entries are already committed in-flight tasks —
+    # they do not need a new capacity slot and should always proceed.
+    # New entries and resume:done entries (re-activating a terminal task) both require
+    # a free slot, same as adding a brand-new task.
+    needs_slot = [e for e in auto_fix if e.get("existing_status") != "paused"]
+    free_resume = [e for e in auto_fix if e.get("existing_status") == "paused"]
+    if needs_slot and not free_resume:
+        # Use the already-fetched tasks list to count active slots rather than calling
+        # get_capacity(), which returns (0, 10) when its API request fails and would
+        # incorrectly allow launching when capacity is actually unknown.
+        max_n = 10
+        active_n = len(
+            [t for t in tasks if t.get("status") in ("in_progress", "pr_open", "pr_changes")]
+        )
+        if active_n >= max_n:
+            output_result(
+                "skip",
+                f"Renovate discovery: at capacity ({active_n}/{max_n}) — "
+                f"{len(needs_slot)} PR(s) pending; will retry when a slot opens",
+            )
+            return
 
     output_result("start", "\n".join(lines).rstrip())
 

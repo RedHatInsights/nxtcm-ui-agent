@@ -137,12 +137,15 @@ def _is_auto_retryable(task: dict) -> bool:
       "transient:*" — network/registry error, safe to retry automatically.
       "blocked:*"   — structural failure (peer dep, unfixable API); wait for
                       human action. Do NOT re-queue.
-    Tasks with no paused_reason prefix default to retryable for backwards compat.
+      ""            — no reason recorded; backwards-compatible default: retryable.
+      anything else — treat as non-retryable. This covers manual dashboard pauses
+                      (default reason "Paused via dashboard") which must not be
+                      auto-resumed — the dashboard pause should reliably stop the bot.
     """
     reason = task.get("paused_reason") or ""
-    if reason.startswith("blocked:"):
-        return False
-    return True
+    if not reason:
+        return True  # No reason — backwards-compatible default: retryable.
+    return reason.startswith("transient:")  # Only transient failures auto-retry.
 
 
 def tracked_renovate_keys(tasks: list[dict]) -> set[str]:
@@ -151,9 +154,11 @@ def tracked_renovate_keys(tasks: list[dict]) -> set[str]:
     Active tasks (in_progress / pr_open / pr_changes) are enriched by Script 02
     and must not appear in AUTO-FIX.
 
-    Paused tasks with a transient failure reason re-enter AUTO-FIX for automatic
-    retry. Paused tasks with a structural (blocked:*) failure reason are waiting
-    for human action and must also stay out of AUTO-FIX to avoid retry spam.
+    Paused tasks with a transient failure reason (or no recorded reason, for
+    backwards compatibility) re-enter AUTO-FIX for automatic retry.  All other
+    paused tasks — structural blockers ("blocked:*") and manual dashboard pauses
+    ("Paused via dashboard" or any other non-transient reason) — are waiting for
+    human action and must stay out of AUTO-FIX to avoid retry spam.
     """
     keys: set[str] = set()
     for task in tasks:
@@ -164,7 +169,8 @@ def tracked_renovate_keys(tasks: list[dict]) -> set[str]:
         if status in _ACTIVE_STATUSES:
             keys.add(key)
         elif status == "paused" and not _is_auto_retryable(task):
-            # Blocked paused task — keep it out of AUTO-FIX; human must act.
+            # Non-retryable paused task (blocked:* reason or manual pause) —
+            # keep it out of AUTO-FIX; human must act to resume.
             keys.add(key)
     return keys
 
