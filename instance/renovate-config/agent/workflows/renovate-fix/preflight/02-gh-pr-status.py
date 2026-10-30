@@ -5,9 +5,11 @@ Extends the shared gh_pr_status.main() with renovate-fix-specific behaviours:
   1. Always retry CI failures (ignore last_addressed gate).
   2. Surface paused tasks that have received new human feedback since they were
      last addressed — these appear in a ### BLOCKED FEEDBACK section so the agent
-     treats them as P1 even though the task is not in an active status.
-  3. Also consider human comments / reviews on the bot's fix PR
-     (metadata.fix_pr), which shared enrich_gh does not inspect.
+     treats them as P1 even though the task is not in an active status. Paused
+     tasks whose Renovate PR is already MERGED/CLOSED are excluded (Priority 4
+     owns close/archive; P1 must not steal the one-item cycle).
+  3. Once metadata.fix_pr exists, hand CI + actionable comments to the fix PR
+     (Renovate PR remains the MERGED/CLOSED lifecycle signal).
 """
 
 import sys
@@ -20,7 +22,7 @@ sys.path.insert(0, str(_wf_root / "lib"))
 import gh_pr_status  # noqa: E402
 from common import INSTANCE_ID, get_tasks, upstream_repo  # noqa: E402
 from common import output_result as _output_result  # noqa: E402
-from fix_pr_feedback import append_fix_pr_feedback  # noqa: E402
+from fix_pr_feedback import apply_fix_pr_handoff  # noqa: E402
 
 _orig_enrich_gh = gh_pr_status.enrich_gh
 
@@ -31,27 +33,31 @@ def _always_retry_ci(_enriched):
 
 
 def _enrich_with_fix_pr(task):
-    """Enrich Renovate PR state, then attach comments from metadata.fix_pr."""
-    return append_fix_pr_feedback(
+    """Enrich Renovate lifecycle, then hand live CI/feedback to fix PR when present."""
+    return apply_fix_pr_handoff(
         _orig_enrich_gh(task),
         gh_pr_comments=gh_pr_status.gh_pr_comments,
         gh_pr=gh_pr_status.gh_pr,
+        classify_gh=gh_pr_status.classify_gh,
         upstream_repo=upstream_repo,
     )
 
 
 def _enrich_skip_conflicted(task):
-    """Suppress conflict-only PRs — Renovate rebases on its own; CI re-surfaces after rebase.
+    """Suppress Renovate-only conflict PRs — Renovate rebases on its own.
 
-    If a reviewer also commented on a conflicted PR (or its fix PR), keep the task
-    visible so it reaches P1 (feedback bucket). Only return None when conflict is
-    the sole issue and there is no new human feedback.
+    After handoff, ``conflict`` in issues comes from the **fix PR**. The bot
+    must rebase that itself — never suppress those. Only drop conflict when
+    there is no fix PR yet (pure Renovate conflict wait) and no new feedback.
     """
     result = _enrich_with_fix_pr(task)
     if result is None:
         return None
     issues = result.get("issues", [])
     if "conflict" not in issues:
+        return result
+    # Fix PR exists → conflict is the bot's problem; keep the task visible.
+    if (task.get("metadata") or {}).get("fix_pr"):
         return result
     if gh_pr_status.has_new_feedback(result):
         result["issues"] = [i for i in issues if i != "conflict"]
@@ -87,6 +93,7 @@ if INSTANCE_ID:
         enriched = _enrich_with_fix_pr(task)
         if not enriched or not gh_pr_status.has_new_feedback(enriched):
             continue
+        # Renovate PR already terminal → Priority 4 owns close/archive.
         issues = enriched.get("issues") or []
         if "merged" in issues or "closed" in issues:
             continue

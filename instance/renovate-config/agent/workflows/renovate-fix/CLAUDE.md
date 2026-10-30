@@ -1,6 +1,6 @@
 # Renovate Fix Workflow
 
-Monitor failing Renovate dependency PRs on configured repos. Auto-fix CI failures. Humans still merge after CI is green. Merge conflicts are handled by Renovate itself.
+Monitor failing Renovate dependency PRs on configured repos. Auto-fix CI failures. Humans still merge after CI is green. Renovate rebase handles conflicts on the Renovate PR; after handoff, fix-PR conflicts with the base branch are the bot's job (rebase the fork tip).
 
 ## Cycle Loop
 
@@ -28,21 +28,33 @@ Active statuses: `in_progress`, `pr_open`, `pr_changes`. Suspended: `paused` (se
 
 **Ignore core Jira / Primary Label sections** — this workflow never uses Jira or Atlassian MCP.
 
+## Fix PR handoff (communication + CI)
+
+**Before** `metadata.fix_pr` exists: Renovate PR is the work surface (comments, CI, checkout).
+
+**After** `metadata.fix_pr` exists:
+- **All bot posts** go to the fix PR (status, blockers, replies). Do not comment on the Renovate PR again (except the one-time handoff comment in Fix Workflow step 12).
+- **Actionable feedback** is expected on the fix PR. Preflight only surfaces fix-PR comments as FEEDBACK. Soft redirect: if a human somehow comments on the Renovate PR after handoff and you notice it outside preflight, reply once on the Renovate PR pointing at the fix PR, then do any code work on the fix branch.
+- **CI FAILING** in preflight is driven by the **fix PR** checks (bot commits live there). Renovate PR CI is ignored once a fix PR exists.
+- **Lifecycle** (MERGED/CLOSED → Priority 4) still comes from the **Renovate PR**.
+- **Checkout** always uses the fork tip (`origin/<headRefName>`), never `gh pr checkout` of the Renovate PR.
+
 ## Priority 1 — Reviewer Comments
 
 Pick first task from **`### FEEDBACK`** or **`### BLOCKED FEEDBACK`** bucket in GH PR Status. A human responded — address it before doing anything else.
 
-Feedback may be on the **Renovate PR** (`metadata.prs`) **or** the **bot fix PR** (`metadata.fix_pr`). Preflight merges both into `pr_comments`; comments from the fix PR are prefixed with `[fix PR #<n>]`. Reply on the same PR the human commented on (`gh pr comment <n> --repo <upstream>`).
+**`### BLOCKED FEEDBACK`** contains previously paused (blocked) tasks that have received new human comments since the last addressed timestamp. Always `task_update(status="in_progress")` before doing any new work on these tasks to re-activate them. Terminal Renovate PRs (MERGED/CLOSED) are excluded — Priority 4 owns those.
 
-**`### BLOCKED FEEDBACK`** contains previously paused (blocked) tasks that have received new human comments since the last addressed timestamp. Always `task_update(status="in_progress")` before doing any new work on these tasks to re-activate them.
-
-**Also check `### CI FAILING` for hidden feedback**: The shared GH PR Status preflight places a PR with CI failures into `CI FAILING` even when it also has new human comments. Before doing CI repair on any `CI FAILING` task, look at its `pr_comments` section in the preflight output. If there are human comments since `last_addressed` (on either the Renovate PR or the fix PR), treat the task as P1 first (address the feedback, then let the next cycle handle CI repair).
+**Also check `### CI FAILING` for hidden feedback**: Before CI repair, look at `pr_comments` in preflight. If there are human comments since `last_addressed`, treat as P1 first.
 
 1. Read the reviewer's comment carefully.
-2. If they request a code change or indicate the previous blocker is resolved (e.g. "fork was created for you, try to open a PR from your fork"): run Fix Workflow steps 1–5 first (nvm/clone/checkout/npm install/load AGENTS.md + prompt.md) to prepare the local branch, make the change (or resume from where the workflow was blocked), run verification (see Fix Workflow step 8), commit, push and open fix PR (see Fix Workflow step 10), post a brief response comment on the PR where they commented. `task_update(last_addressed=now)`.
-   - If `npm install` fails during this preparation (step 4): post a PR comment explaining the failure and that the requested change cannot be applied until install is resolved. `task_update(status="paused", paused_reason="blocked: npm install failed during P1 response: <stderr summary>", last_addressed=now)`. Stop — do not attempt the code change.
-3. If they provide guidance on an unfixable situation (e.g. "close this PR", "pin to older version"): do not change dependency versions. Post a comment on the PR where they commented acknowledging and explaining what action is needed from them (the bot can't close the Renovate PR or change Renovate's version pins). `task_update(last_addressed=now)`.
-4. If the comment is informational with no action needed: post a brief acknowledgement on the PR where they commented. `task_update(last_addressed=now)`.
+2. If they request a code change or indicate the previous blocker is resolved (e.g. "fork was created for you, try to open a PR from your fork"):
+   - **`metadata.fix_pr` is set**: Fix Workflow steps 1–2 first (nvm + clone/fetch remotes), then **Checkout fork tip**, then steps 4–5, change, verify (step 8), commit, `git push origin HEAD:<headRefName>`. Do not open a second PR. Reply on the **fix PR**.
+   - **No fix PR yet**: Fix Workflow steps 1–5 (Renovate checkout), change, verify (step 8), commit, push + open fix PR (steps 10–12). That persists `metadata.fix_pr` and posts the handoff on Renovate. Reply on the PR where they commented (Renovate, until handoff completes).
+   - Checkout / push failure rules: see **Checkout fork tip** and Fix Workflow push-failure rules. Do **not** set `last_addressed` or claim success unless the push (and create, when needed) succeeded. Then reply and `task_update(last_addressed=now)`.
+   - If `npm install` fails (step 4): post on the active communication PR (fix PR if set, else Renovate). `task_update(status="paused", paused_reason="blocked: npm install failed during P1 response: <stderr summary>", last_addressed=now)`. Stop.
+3. If they provide guidance on an unfixable situation (e.g. "close this PR", "pin to older version"): do not change dependency versions. Reply on the active communication PR (fix PR if set, else Renovate) explaining what they must do (bot can't close the Renovate PR or change Renovate pins). `task_update(last_addressed=now)`.
+4. If informational with no action: brief ack on the active communication PR. `task_update(last_addressed=now)`.
 
 ## Priority 2 — Tracked Work and Resumptions
 
@@ -55,7 +67,7 @@ Finish existing commitments before taking on new work.
 
 For `resume:paused` entries: call `task_update(status="in_progress")` before starting Fix Workflow — the task was suspended; mark it active before doing work.
 
-Then run the **Fix Workflow** below.
+Then run the **Fix Workflow** below. If `metadata.fix_pr` is set, step 3 uses **Checkout fork tip** (not Renovate `gh pr checkout`).
 
 ## Priority 3 — New Untracked PRs
 
@@ -89,6 +101,25 @@ task_add(
 
 Then run the **Fix Workflow** below.
 
+## Checkout fork tip
+
+Used whenever `metadata.fix_pr` is set (P1 follow-up, P2 CI repair, Fix Workflow step 3). Shallow clones are single-branch — a plain `git fetch origin` will **not** create `origin/<headRefName>`.
+
+From `./repos/<repo-key>/` after steps 1–2:
+
+```bash
+head_ref=<metadata.head_ref or task.branch>
+git fetch origin "${head_ref}:refs/remotes/origin/${head_ref}"
+git checkout -B "${head_ref}" "origin/${head_ref}"
+```
+
+- Fetch/checkout fails → stop. Do **not** reply as success. Do **not** set `last_addressed`.
+  - Transient (network): `task_update(status="paused", paused_reason="transient: fix PR checkout failed: <stderr summary>")`
+  - Permanent (branch deleted / missing on fork): `task_update(status="paused", paused_reason="blocked: fix PR checkout failed: <stderr summary>")`. Post on the fix PR if possible.
+- Push after changes: `git push origin HEAD:${head_ref}` — same rules as Fix Workflow push-failure (do **not** `paused`+`transient:` on push; that strands the task after handoff because Discovery only resumes paused work when the Renovate PR still looks actionable):
+  - Auth/permission (HTTP 403, remote rejected): `task_update(status="paused", paused_reason="blocked: fork push rejected — check bot fork access")`. Post on the fix PR. Stop — do not auto-retry.
+  - Transient (network): `task_update(metadata.last_step="push_failed")`, post on the fix PR, keep `in_progress` (no `last_addressed`). Next cycle re-enters via fix-PR `### CI FAILING` or active-task status.
+
 ## Fix Workflow
 
 Used by P2 (tracked/resumed tasks) and P3 (new tasks). Task tracking is handled above — go directly to step 1.
@@ -99,9 +130,10 @@ Used by P2 (tracked/resumed tasks) and P3 (new tasks). Task tracking is handled 
    - Ensure upstream remote exists (idempotent, covers both fresh clone and existing repo):
      `git remote get-url upstream 2>/dev/null || git remote add upstream <upstream-url from project-repos.json>`
    - `git fetch origin && git fetch upstream` (fork workflow)
-   - After `gh pr checkout`, deepen if rebase needs history: `git fetch --deepen=50` or `git fetch --unshallow`
-3. Checkout Renovate branch: `gh pr checkout <N> --repo <upstream>` from `./repos/<repo-key>/`
-   - If checkout fails (branch deleted, access denied, merge in progress): `task_update(status="paused", paused_reason="blocked: gh pr checkout failed: <stderr summary>")`. Post a PR comment if the failure is permanent (e.g. branch deleted). Stop — do not attempt npm install or any further steps.
+   - After checkout, deepen if rebase needs history: `git fetch --deepen=50` or `git fetch --unshallow`
+3. Checkout the work branch from `./repos/<repo-key>/`:
+   - **`metadata.fix_pr` is set** → **Checkout fork tip** (above). Never `gh pr checkout` the Renovate PR.
+   - **No fix PR yet** → `gh pr checkout <N> --repo <upstream>` (Renovate PR). If that fails (branch deleted, access denied, merge in progress): `task_update(status="paused", paused_reason="blocked: gh pr checkout failed: <stderr summary>")`. Post a PR comment if the failure is permanent (e.g. branch deleted). Stop — do not attempt npm install or any further steps.
 4. `npm install` — if it fails, inspect the error:
    - **Peer dependency conflict**: Renovate only bumps one package at a time, which can leave transitive deps in an incompatible state. The bot can safely resolve these narrow conflicts via `overrides` without making version decisions that belong to Renovate. Attempt a safe fix before escalating:
      1. Identify which package is conflicting and why (read the npm error output carefully).
@@ -111,10 +143,10 @@ Used by P2 (tracked/resumed tasks) and P3 (new tasks). Task tracking is handled 
    - **Other structural failure** (incompatible engines, missing package): post a PR comment explaining why the fix can't proceed and what a human needs to decide. `task_update(status="paused", paused_reason="blocked: npm install failed: <stderr summary>")`. Stop — wait for reviewer action or PR closure.
    - **Transient failure** (network error, registry timeout, rate limit): `task_update(status="paused", paused_reason="transient: npm install failed: <stderr summary>")`, no PR comment. Stop. Auto-retried next cycle.
 5. Read `AGENTS.md` + reload `personas/frontend/prompt.md`
-6. Diagnose CI failures from preflight (`ci_fail:*` checks). The issue list will not contain `conflict` at this point — the preflight filter excludes conflicted PRs entirely (they wait for Renovate to rebase; the CI failure re-surfaces cleanly on the next cycle). If multiple `ci_fail:*` issues are listed (e.g. `ci_fail:lint`, `ci_fail:types`), fix all of them in this cycle — the verification sequence in step 8 will confirm all are resolved before pushing.
+6. Diagnose CI failures from preflight (`ci_fail:*` checks). Once a fix PR exists these are the **fix PR** checks. Preflight suppresses **Renovate-only** conflict (no fix PR yet). After handoff, fix-PR `conflict` stays visible — rebase the fork tip onto the base branch, push, and continue. If multiple `ci_fail:*` issues are listed, fix all of them in this cycle — verification in step 8 confirms before pushing.
 7. Fix code/lockfile/config — **do NOT change dependency versions beyond what Renovate already bumped**
    - Expect breaking API/type changes on large upgrades; fix call sites/tests as needed while keeping Renovate's version pin
-   - **If a fix genuinely doesn't exist** (e.g. the new version has no compatible API for what the codebase does): post a PR comment explaining the blocker. `task_update(status="paused", paused_reason="blocked: <reason>")`. Stop — wait for reviewer to decide.
+   - **If a fix genuinely doesn't exist** (e.g. the new version has no compatible API for what the codebase does): post on the active communication PR (fix PR if set, else Renovate). `task_update(status="paused", paused_reason="blocked: <reason>")`. Stop — wait for reviewer to decide.
 8. Run the **Verification sequence** defined in `personas/frontend/prompt.md` (already reloaded in step 5). Do NOT use `npm run test:all:quiet` from `AGENTS.md` — it bundles CT and cannot be shimmed in this container.
    If any verification step fails: return to step 7, fix the underlying issue, and re-run from the failing step. If the failure is unrelated to the version bump (pre-existing) or has no fix, treat it as a blocker (see step 7 blocked case).
 9. Stage and commit all changed files. Always include `package-lock.json` if it changed (e.g. after an `npm install` with `overrides`). If `package.json` was modified (e.g. `overrides` entry added), include it too. Use a message that reflects the nature of the fix:
@@ -157,14 +189,14 @@ Used by P2 (tracked/resumed tasks) and P3 (new tasks). Task tracking is handled 
       exit 1
     fi
     ```
-11. `task_update(status="pr_open", last_addressed=now, metadata.last_step="ci_fix_pushed", metadata.fix_pr={"url": "<fix_pr_url>", "repo": "<upstream_path>", "number": <fix_pr_number>, "host": "github"})` — store `url` plus structured fields so preflight can fetch reviewer comments on the fix PR (not only the Renovate PR). URL-only also works for older tasks.
-12. Post comment on the **Renovate PR** (#N): what was fixed, verification results, and the link to the new fix PR on the fork.
+11. **Required:** `task_update(status="pr_open", last_addressed=now, metadata.last_step="ci_fix_pushed", metadata.fix_pr={"url": "<fix_pr_url>", "repo": "<upstream_path>", "number": <fix_pr_number>, "host": "github"})` — without this, preflight cannot hand CI/comments to the fix PR. (P1 "no fix PR yet" must run this step too, not only `last_addressed`.)
+12. **One-time handoff** on the **Renovate PR** (#N): brief note that the fix PR is open, what was fixed / verification summary, and that **further review and discussion should continue on the fix PR**. After this, all bot communication is on the fix PR. Also post the same summary on the **fix PR** as the working thread.
 
 On push failure to `origin` — inspect the error before deciding:
-- **Auth/permission error** (HTTP 403, "remote rejected"): `task_update(status="paused", paused_reason="blocked: fork push rejected — check bot fork access")`. Post a PR comment explaining the blocker. Stop — do not retry.
-- **Transient error** (network timeout, temporary server error): `task_update(metadata.last_step="push_failed")`, post a PR comment, keep `in_progress`. Will retry next cycle via `### CI FAILING`.
+- **Auth/permission error** (HTTP 403, "remote rejected"): `task_update(status="paused", paused_reason="blocked: fork push rejected — check bot fork access")`. Post on the active communication PR. Stop — do not retry.
+- **Transient error** (network timeout, temporary server error): `task_update(metadata.last_step="push_failed")`, post on the active communication PR, keep `in_progress`. Will retry next cycle via `### CI FAILING` (fix PR checks once `metadata.fix_pr` is set).
 
-**CI still red after push**: next cycle re-enters via `### CI FAILING` (this workflow always retries CI — partial fixes continue).
+**CI still red after push**: next cycle re-enters via `### CI FAILING` on the **fix PR** once handed off (this workflow always retries CI — partial fixes continue).
 
 ## Priority 4 — Merged / Closed PR Cleanup
 
@@ -172,40 +204,61 @@ Unlike P1–P3, P4 processes **all** matching items in one pass.
 
 **Close the bot fix PR** before archiving. This is the only PR the bot closes. Do not close the Renovate PR. Do not delete the fork branch or the Renovate branch.
 
+**Per-task bindings** — at the start of each P4 item, clear close state so a prior task cannot leak:
+```bash
+fix_repo=""; fix_pr_number=""; fix_pr_url=""; allow_archive_without_close=0
+```
+
 **Resolve `<fix-repo>` / `<fix-number>`** — same preference order as preflight `resolve_fix_pr` (URL first):
-1. Prefer `metadata.fix_pr.url` → parse `github.com/<owner>/<repo>/pull/<n>`.
-2. Else use `metadata.fix_pr.number` with `metadata.fix_pr.repo`. If `repo` has no `/` (bare key like `nxtcm-components`), resolve it to the upstream `owner/repo` via `project-repos.json` (same upstream used for the Renovate PR). Never pass a bare key to `gh`.
-3. If `metadata.fix_pr` is missing entirely: rediscover the open fix PR the same way Fix Workflow step 10 does:
+1. Prefer `metadata.fix_pr.url` → parse `github.com/<owner>/<repo>/pull/<n>` into `fix_repo` + `fix_pr_number`.
+2. Else use `metadata.fix_pr.number` with `metadata.fix_pr.repo`. If `repo` has no `/` (bare key), resolve via `project-repos.json` upstream. Never pass a bare key to `gh`.
+3. If `metadata.fix_pr` is set but steps 1–2 cannot resolve a concrete `owner/repo` + number → **do not archive** (`continue`). Do not fall through to “nothing to close.”
+4. If `metadata.fix_pr` is missing entirely: rediscover. Set `upstream_path` from `metadata.prs[0].repo` or `project-repos.json` (fresh each task — do not reuse a prior shell value).
    ```bash
-   fork_owner=$(gh api user --jq .login)
    head_ref=<metadata.head_ref or task.branch>
-   fix_pr_json=$(gh pr list \
+   if [ -z "$upstream_path" ] || [ -z "$head_ref" ]; then
+     continue  # do not archive
+   fi
+   fork_owner=$(gh api user --jq .login) || continue
+   if ! fix_pr_json=$(gh pr list \
      --repo "$upstream_path" \
      --head "${fork_owner}:${head_ref}" \
      --state open \
-     --json url,number --jq '.[0] // empty')
+     --json url,number --jq '.[0] // empty'); then
+     continue  # do not archive
+   fi
+   if [ -z "$fix_pr_json" ]; then
+     allow_archive_without_close=1  # exit 0 + empty → no open fix PR
+   else
+     fix_pr_url=$(echo "$fix_pr_json" | jq -r '.url // empty')
+     fix_pr_number=$(echo "$fix_pr_json" | jq -r '.number // empty')
+     fix_repo="$upstream_path"
+     if [ -z "$fix_pr_number" ] || [ -z "$fix_repo" ]; then
+       continue  # do not archive
+     fi
+   fi
    ```
-   - Rediscovery returns empty → no open fix PR; continue with archive.
-   - Rediscovery / `gh` API errors → do **not** archive; leave the task tracked for retry.
 
-**Close sequence** (must honor exit codes — empty state is not "already closed"):
+**Close sequence** (must honor exit codes):
 ```bash
-if ! fix_state=$(gh pr view <fix-number> --repo <fix-repo> --json state --jq .state); then
-  # view failed (auth, network, wrong repo) — DO NOT archive this task
-  # leave it tracked so the next cycle retries
-  continue
-fi
-if [ "$fix_state" = "OPEN" ]; then
-  if ! gh pr close <fix-number> --repo <fix-repo> \
-      --comment "Closing because Renovate PR #<N> was merged or closed."; then
-    # close failed — DO NOT archive; leave task tracked for retry
+if [ "$allow_archive_without_close" = "1" ]; then
+  :  # rediscovery proved no open fix PR — archive allowed
+elif [ -z "$fix_pr_number" ] || [ -z "$fix_repo" ]; then
+  continue  # unresolved — do NOT archive
+else
+  if ! fix_state=$(gh pr view "$fix_pr_number" --repo "$fix_repo" --json state --jq .state); then
     continue
   fi
+  if [ "$fix_state" = "OPEN" ]; then
+    if ! gh pr close "$fix_pr_number" --repo "$fix_repo" \
+        --comment "Closing because Renovate PR #<N> was merged or closed."; then
+      continue
+    fi
+  fi
 fi
-# Already MERGED/CLOSED, or successfully closed → proceed to archive
 ```
 
-**Failure rule (active and paused alike):** Only archive after a successful close, or when the fix PR is already `MERGED`/`CLOSED`, or when rediscovery finds no open fix PR. If resolve, rediscovery, `gh pr view`, or `gh pr close` fails, do **not** call `task_outcome_report` / `task_remove` for that task.
+**Failure rule (active and paused alike):** Only archive after a successful close, when the fix PR is already `MERGED`/`CLOSED`, or when rediscovery exits 0 with empty stdout (`allow_archive_without_close=1`). Unresolvable `metadata.fix_pr`, failed `gh`, or empty bindings without that flag → do **not** call `task_outcome_report` / `task_remove`.
 
 **Active task cleanup**: When the **GH PR Status section** (`### MERGED` / `### CLOSED` buckets in script 02 output) shows tracked Renovate tasks as merged or closed, for each one:
 
@@ -242,10 +295,11 @@ This override is intentional and authorized: the bot does not have write access 
 - **ONE item/cycle** — fix one PR issue, then stop
 - **Never merge PRs** — humans merge after CI green
 - **Close the bot fix PR** when its Renovate PR is merged or closed (Priority 4). Never close the Renovate PR. Never delete the fork branch.
+- **After handoff**, communicate and repair CI on the **fix PR** only; Renovate PR is lifecycle + initial discovery.
 - **Never create Jira tickets** or use Jira MCP tools
 - **Never modify `.github/workflows/`**
 - **Ignore Renovate bot comments** as actionable feedback (`renovate[bot]` is a bot author)
 - **Do NOT re-fetch** data already in preflight input
 - Reload `personas/frontend/prompt.md` before fixing nxtcm-components
 - Use `gh pr comment` for human-facing updates (normal language, not caveman mode)
-- Renovate may rebase its branch; if that causes new CI failures on its PR, the fix PR on the fork will need to be rebased — re-run the fix workflow on the next cycle if CI re-fails
+- If the fix PR drifts from main, rebase the fork tip and push; next cycle uses fix-PR CI FAILING if checks stay red
