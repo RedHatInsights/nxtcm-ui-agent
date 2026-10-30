@@ -85,8 +85,12 @@ if INSTANCE_ID:
     paused_with_feedback = []
     for task in paused_tasks:
         enriched = _enrich_with_fix_pr(task)
-        if enriched and gh_pr_status.has_new_feedback(enriched):
-            paused_with_feedback.append(enriched)
+        if not enriched or not gh_pr_status.has_new_feedback(enriched):
+            continue
+        issues = enriched.get("issues") or []
+        if "merged" in issues or "closed" in issues:
+            continue
+        paused_with_feedback.append(enriched)
 
     if paused_with_feedback:
         blocked_feedback_lines = [
