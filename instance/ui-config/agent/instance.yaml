@@ -2,7 +2,7 @@ workflow: jira-sprint
 source: jira
 runtime: opencode
 provider: rehor-openai
-model: gpt-6.1-terra
+model: gpt-6.1-sol
 image:
   repository: quay.io/redhat-services-prod/console-next-tenant/nxtcm-ui-agent/nxtcm-ui-agent
   tag: latest
