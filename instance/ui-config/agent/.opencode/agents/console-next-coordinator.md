@@ -1,6 +1,7 @@
 ---
 description: Owns the Console Next Jira sprint workflow and delegates local component-library work.
 mode: primary
+model: rehor-openai/gpt-6.1-sol
 permissions:
   - { action: subagent, resource: "*", effect: deny }
   - { action: subagent, resource: frontend, effect: allow }

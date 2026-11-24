@@ -1,6 +1,7 @@
 ---
 description: Implements and verifies scoped Console Next UI changes in nxtcm-components.
 mode: subagent
+model: rehor-openai/gpt-6.1-terra
 permissions:
   - { action: subagent, resource: "*", effect: deny }
 ---
