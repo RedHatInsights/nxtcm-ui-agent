@@ -1,5 +1,31 @@
 workflow: jira-sprint
 source: jira
+runtime: opencode
+provider: rehor-openai
+model: gpt-6.1-terra
+image:
+  repository: quay.io/redhat-services-prod/console-next-tenant/nxtcm-ui-agent/nxtcm-ui-agent
+  tag: latest
+env:
+  BOT_INSTANCE_ID: Řehoř řečený Stormbreaker
+  BOT_LABEL: hcc-ai-nxtcm
+  BOT_BOARD_NAME: Console Next Sprint Board
+  BOT_SPRINT_PREFIX: Console Next Sprint
+  BOT_INCLUDE_BACKLOG: 'true'
+  BOT_CONFIG_PATH: instance/ui-config
+  BOT_EXECUTION_ENGINE: coordinator
+preflights:
+  - gh-pr-status
+  - gl-mr-status
+  - id: jira-sprint
+    with:
+      label: hcc-ai-nxtcm
+      include_backlog: true
+schedule:
+  triggers:
+    - timezone: America/New_York
+      start: '0 9 * * 1-5'
+      end: '0 18 * * 1-5'
 envs:
   - node
   - patternfly-mcp

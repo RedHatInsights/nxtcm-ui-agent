@@ -1,5 +1,11 @@
 workflow: ./workflows/renovate-fix
 source: scheduled
+image:
+  repository: quay.io/redhat-services-prod/console-next-tenant/nxtcm-ui-agent/nxtcm-ui-agent
+  tag: latest
+env:
+  BOT_INSTANCE_ID: Řehoř Dep Master
+preflights: []
 envs:
   - node
   - patternfly-mcp
