@@ -1,5 +1,7 @@
 # Renovate Fix Workflow
 
+> Compatibility-only: this file guides the legacy runtime and is retained for rollback until the legacy bot is offboarded. OpenCode runs use `AGENTS.md` beside it, which delegates code fixes to the native `frontend` subagent; do not add new guidance here.
+
 Monitor failing Renovate dependency PRs on configured repos. Auto-fix CI failures. Humans still merge after CI is green. Renovate rebase handles conflicts on the Renovate PR; after handoff, fix-PR conflicts with the base branch are the bot's job (rebase the fork tip).
 
 ## Cycle Loop

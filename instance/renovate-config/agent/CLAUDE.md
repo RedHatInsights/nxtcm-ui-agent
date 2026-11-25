@@ -1,5 +1,7 @@
 # nxtcm-renovate Instance — Additional Instructions
 
+> Compatibility-only: this file guides the legacy runtime and is retained for rollback until the legacy bot is offboarded. OpenCode runs use `AGENTS.md` beside it; do not add new guidance here.
+
 Ignore core Primary Label / Jira workflow sections — this instance never uses Jira.
 
 ## Version Management
