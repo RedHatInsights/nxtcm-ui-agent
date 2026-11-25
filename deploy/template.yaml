@@ -13,6 +13,9 @@ parameters:
   value: hcc-ai-nxtcm
 - name: BOT_REPLICAS
   value: "0"
+- name: KEDA_PAUSED
+  value: "false"
+  description: Pause the KEDA cron scaler for a coordinated cutover. Pair with BOT_REPLICAS=0 and pause while the target is already scaled to zero; KEDA's paused annotation alone freezes the current replica count.
 - name: BOT_BOARD_NAME
   value: "Console Next Sprint Board"
 - name: BOT_SPRINT_PREFIX
@@ -246,10 +249,20 @@ objects:
         protocol: TCP
 
 # --- Cron Scaler ---
+# KEDA_PAUSED is an opt-in, temporary cutover switch, not an offboarding path.
+# KEDA parses the annotation value (requires KEDA >= 2.13; older releases pause
+# on annotation presence alone), stops the scale loop and deletes the generated
+# HPA, but leaves the target at its current replica count. Pausing while the
+# target is at 1 freezes it at 1, so scale to zero first: either pause outside
+# the active cron window (after cooldown) or land BOT_REPLICAS=0 with the HPA
+# already removed. Rollback: set KEDA_PAUSED back to "false" (or remove the
+# parameter) to resume the unchanged cron window.
 - apiVersion: keda.sh/v1alpha1
   kind: ScaledObject
   metadata:
     name: ${BOT_NAME}-cron-scaler
+    annotations:
+      autoscaling.keda.sh/paused: "${KEDA_PAUSED}"
     labels:
       app.kubernetes.io/name: ${BOT_NAME}
       app.kubernetes.io/part-of: devbot
