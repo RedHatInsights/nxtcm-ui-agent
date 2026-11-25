@@ -5,7 +5,14 @@ image:
   tag: latest
 env:
   BOT_INSTANCE_ID: Řehoř Dep Master
-preflights: []
+preflights:
+  - renovate-discover
+  - renovate-pr-status
+schedule:
+  triggers:
+    - timezone: America/New_York
+      start: '0 9 * * 1-5'
+      end: '0 18 * * 1-5'
 envs:
   - node
   - patternfly-mcp
