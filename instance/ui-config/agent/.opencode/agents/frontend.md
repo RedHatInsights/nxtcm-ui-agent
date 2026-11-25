@@ -29,9 +29,10 @@ Check `package.json` and use only npm scripts. Never run npm commands in paralle
 
 1. `npm run lint` — covers `packages/**/*.{ts,tsx}`.
 2. `npm run type-check` — root and workspace TypeScript.
-3. `PLAYWRIGHT_BROWSERS_PATH=/opt/pw-browsers npm run test:all` — Jest and Playwright CT. Jest does not run in CI, so always run this locally before PR.
-4. `npm run build` — root library. For each changed workspace, also run `npm run build -w @redhat-cloud-services/nxtcm-dashboard` or `npm run build -w @redhat-cloud-services/nxtcm-rosa-hcp-wizard`, as applicable.
-5. Apply visual change detection and capture screenshots when required. Storybook is not a substitute for tests and build.
+3. `PLAYWRIGHT_BROWSERS_PATH=/opt/pw-browsers npm run test:all:quiet` — Jest, custom ESLint rule tests, and Playwright CT with the quiet line reporter. Jest does not run in CI, so always run this locally before PR.
+4. `PLAYWRIGHT_BROWSERS_PATH=/opt/pw-browsers npm run test:e2e` — Playwright E2E, run separately from `test:all:quiet`; it uses a local Vite dev server and needs no SSO or external proxy.
+5. `npm run build` — root library. For each changed workspace, also run `npm run build -w @redhat-cloud-services/nxtcm-dashboard` or `npm run build -w @redhat-cloud-services/nxtcm-rosa-hcp-wizard`, as applicable.
+6. Apply visual change detection and capture screenshots when required. Storybook is not a substitute for tests and build.
 
 For standalone component tests, use `PLAYWRIGHT_BROWSERS_PATH=/opt/pw-browsers npm run test:ct`; tests match `packages/nxtcm-*/src/**/*.spec.tsx`. In the container, temporarily add `launchOptions: { args: ['--no-sandbox', '--disable-gpu'] }` to `use` in `playwright-ct.config.ts` when needed for Chromium. Restore only your temporary patch before handoff. Use `--workers=1` on resource errors. E2E uses a local Vite server: `PLAYWRIGHT_BROWSERS_PATH=/opt/pw-browsers npm run test:e2e`. No HCC dev-proxy, SSO, or live console environment is required.
 

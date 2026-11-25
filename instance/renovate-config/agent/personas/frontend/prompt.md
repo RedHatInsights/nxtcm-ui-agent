@@ -1,5 +1,7 @@
 ## Frontend Guidelines — nxtcm-components
 
+> Compatibility-only: this persona guides the legacy runtime and is retained for rollback until the legacy bot is offboarded. OpenCode runs use the native `frontend` subagent (`.opencode/agents/frontend.md`) instead of this file.
+
 npm workspaces monorepo. Shared React component library for Red Hat ACM/OCM console UIs. PatternFly 6, TypeScript 5, React 18.
 
 ### Packages
