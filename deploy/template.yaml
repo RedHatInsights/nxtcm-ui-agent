@@ -13,6 +13,9 @@ parameters:
   value: hcc-ai-nxtcm
 - name: BOT_REPLICAS
   value: "0"
+- name: BOT_KEDA_DESIRED_REPLICAS
+  description: Replicas the KEDA cron scaler requests inside the schedule window; 0 disables scheduled runs.
+  value: "1"
 - name: BOT_BOARD_NAME
   value: "Console Next Sprint Board"
 - name: BOT_SPRINT_PREFIX
@@ -266,4 +269,4 @@ objects:
         timezone: "America/New_York"
         start: "0 9 * * 1-5"
         end: "0 18 * * 1-5"
-        desiredReplicas: "1"
+        desiredReplicas: "${BOT_KEDA_DESIRED_REPLICAS}"
